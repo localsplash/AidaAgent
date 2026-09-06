@@ -1,0 +1,16 @@
+name: AidaAgent
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  offline-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies, run fake-provider tests, and check worker CLI
+        run: docker build --target test --tag aida-agent:test .
+      - name: Build non-root runtime image
+        run: docker build --target runtime --tag aida-agent:runtime .
