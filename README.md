@@ -194,3 +194,16 @@ OfficePulse token authorization and SUPER ADMIN visibility.
 - [Data packets](https://docs.livekit.io/transport/data/packets/)
 - [Inference TTS and voice configuration](https://docs.livekit.io/agents/models/tts/cartesia/)
 - [Platform specification](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/main/docs/AIDA_VOICE_PLATFORM_TECHNICAL_SPECIFICATION.md)
+
+## Status-only preview
+
+Run `aida-agent preview` while voice configuration is being supplied. This command
+uses Python's standard HTTP server on port 8081, imports no LiveKit SDK, and never
+registers a worker or calls a provider. `/healthz` returns 200; `/readyz` always
+returns 503 because this mode cannot handle calls. The JSON status lists missing
+setting names only. Supplying every setting does not activate voice: explicitly
+restart with `aida-agent start` after configuring and validating the providers.
+Use `preview --host 127.0.0.1 --port 8081` for a local-only status listener.
+
+Normal `start` and `dev` behavior is unchanged. The status service is internal
+in the development preview and does not require an NPM hostname.

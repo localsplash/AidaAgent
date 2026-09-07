@@ -8,11 +8,11 @@ RUN pip install .
 FROM base AS test
 RUN pip install '.[test]'
 COPY tests ./tests
-RUN --network=none ruff check src tests && pytest -q && aida-agent --help && aida-agent start --help
+RUN --network=none ruff check src tests && pytest -q && aida-agent --help && aida-agent start --help && aida-agent preview --help
 
 FROM base AS runtime
 RUN useradd --create-home --uid 10001 aida
 USER aida
-RUN --network=none aida-agent start --help
+RUN --network=none aida-agent start --help && aida-agent preview --help
 ENTRYPOINT ["aida-agent"]
 CMD ["start"]
