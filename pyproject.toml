@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aida-agent"
+version = "0.1.0"
+description = "OfficePulse-dispatched LiveKit voice screening worker"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = ["livekit-agents==1.8.0", "livekit-plugins-silero==1.8.0"]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.2", "pytest-asyncio==1.2.0", "ruff==0.12.12"]
+
+[project.scripts]
+aida-agent = "aida_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
