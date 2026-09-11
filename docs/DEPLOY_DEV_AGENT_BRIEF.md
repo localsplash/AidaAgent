@@ -4,6 +4,8 @@ Deploy the GitHub `dev` revision of `localsplash/AidaAgent` on
 `dockerappvm01.localsplash.dev`. Generate the required environment configuration
 using approved secret/configuration sources. Preserve the canonical single Agent
 service and distinguish a status-only deployment from an enabled voice worker.
+This is an initial development deployment; AidaAgent has never been live. No
+rollback plan, configuration backup, or retention of a previous image is required.
 
 ## Verified starting point (2026-09-11)
 
@@ -45,9 +47,8 @@ fallback. The worker neither reads a database/NocoDB nor controls other call leg
 1. Inspect Git status and remote `dev`. Preserve any unrelated local work. Fetch
    via `git@github.com:localsplash/AidaAgent.git`, and build an exact fetched `dev`
    commit from a clean checkout/worktree. Record the full SHA.
-2. Preserve the current Compose configuration and any existing secret file
-   without copying their contents into task output. Record the current container
-   image ID and keep that image for rollback; do not prune it.
+2. Inspect the current Compose configuration and existing setting names without
+   copying secret values into task output. Update the development deployment in place.
 3. Build and validate from that checkout:
 
    ```sh
@@ -146,7 +147,7 @@ healthcheck:
 Recreate only `agent` and verify outbound registration under the selected name.
 An SDK process-health 200 does not establish per-call readiness or working audio.
 
-## Acceptance and rollback
+## Acceptance
 
 Use approved development test calls. Confirm ready once after authorization,
 English business prompt/greeting, caller audio and barge-in, transcripts on the
@@ -155,11 +156,10 @@ missing, expired and reused credentials; each must prevent normal turns and
 produce the actual local PBX fallback. Test two businesses for isolation. Do not
 claim real-provider/PBX acceptance based on fake-provider unit tests.
 
-If verification fails, silence/stop only this Agent service and restore the prior
-image/configuration or preview mode. Restore the corresponding healthcheck.
-Producer/consumer contracts must roll back together; never restart an incompatible
-inline-metadata worker against a token-only producer. Do not delete LiveKit rooms,
-remove human/SIP participants, restart the whole platform, or modify live bridges.
+If verification fails, diagnose and fix the development deployment, rebuild as
+needed, and repeat the affected checks. Keep voice disabled while the documented
+OfficePulse prerequisites are missing. Producer and worker must use the same
+bootstrap contract and dispatch name.
 
 Report: source SHA, image tag/ID, Compose path, command/mode, health result,
 registration/acceptance evidence, and remaining blockers. Report no secret values.

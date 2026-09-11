@@ -207,8 +207,9 @@ does not implement that telephony fallback.
    greeting, missing/wrong/reused tokens falling back locally, and concurrent
    businesses remaining isolated. Verify transcript delivery, barge-in, human
    takeover during startup/screening, and failed takeover.
-4. Promote producer and worker together after acceptance. Roll back the pair
-   together; never mix workers with different contracts under one agent name.
+4. Enable producer and worker together after development acceptance. This Agent
+   has never been live; no rollback preparation is required. Fix any failed
+   checks in place and keep producer/worker contracts aligned under one agent name.
 
 ## Issue #7 audit
 
