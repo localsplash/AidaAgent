@@ -5,9 +5,10 @@ dispatches one screening agent to `aida-<callSessionId>`. The worker listens to
 the caller's SIP audio, responds using LiveKit Inference, streams transcripts to
 AidaHandset, and leaves when OfficePulse confirms a human has answered.
 
-This repository previously contained only a README. This is the first runnable
-MVP; real audio, carrier bridging, and Android end-to-end behavior still require
-a LiveKit/PBX acceptance call.
+This worker implements call-scoped bootstrap authorization and SIP-leg validation.
+It requires the [bootstrap contract](docs/BOOTSTRAP_CONTRACT.md). Current OfficePulse
+dev intentionally returns local fallback pending native call admission; its new
+bootstrap endpoint and a real LiveKit/PBX acceptance call remain release prerequisites.
 
 ## Ownership
 
@@ -19,8 +20,9 @@ a LiveKit/PBX acceptance call.
 - **AidaHandset** displays live transcripts using a tenant-authorized room token
   from OfficePulse.
 
-The worker trusts dispatch metadata from an operator-controlled LiveKit project.
-Tenant/room validation does not replace OfficePulse authorization. Keep dispatch
+The worker receives only a call ID and one-time bootstrap credential in dispatch.
+OfficePulse must authorize and atomically consume bootstrap and SIP route credentials
+before returning the immutable business profile. Keep dispatch
 and room-admin credentials on servers. Each business call has separate state.
 
 ## Run
@@ -30,7 +32,7 @@ OfficePulse/PBX SIP path into that project's rooms.
 
 ```sh
 cp .env.example .env
-# Set LiveKit credentials and review model/voice choices in .env.
+# Set LiveKit credentials, bootstrap URL/attribute, and model/voice choices in .env.
 docker compose build
 docker compose up -d
 docker compose ps
@@ -42,7 +44,8 @@ process status does not validate SIP audio, dispatch, or inference.
 
 `AIDA_AGENT_NAME` defaults to `aida-prime` and must match OfficePulse's
 `LIVEKIT_AGENT_NAME`. Alongside a pre-existing cloud agent, use `aida-prime-dev`
-in both deployments. Retire the previous worker before reusing its name:
+in both deployments. The example uses `aida-prime-bootstrap-dev` for the new
+contract. Retire the previous worker before reusing its name:
 identical names may receive jobs across either implementation. The historical
 Cloud deployment ID `CA_Lbh5CTq2Rxhd` is not a runtime configuration source.
 
@@ -72,42 +75,33 @@ input are disabled. Application logs omit prompts, transcripts, metadata, and
 provider exception payloads. Keep SDK debug logging disabled for real calls;
 inference providers necessarily process the supplied audio and text.
 
-## Dispatch contract v1
+## Dispatch and authorized profile
 
-OfficePulse sends JSON as **job dispatch metadata**, not room/participant
-metadata. Missing `schemaVersion` means v1; explicit `schemaVersion: 1` is also
-accepted. Other versions and unknown fields are rejected before room connection
-or provider initialization.
+Job dispatch metadata contains exactly `callSessionId` and `bootstrapToken`.
+Inline business context and unknown fields are rejected before connection.
+The worker joins the matching `aida-<callSessionId>` room without subscriptions,
+waits for the inbound SIP participant and configured route-token attribute,
+and authorizes both credentials with OfficePulse. Only the returned immutable
+`profileSnapshot` can supply business context.
 
-```json
-{
-  "schemaVersion": 1,
-  "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
-  "tenantId": "42",
-  "businessName": "Example Office",
-  "prompt": "Ask why the caller is calling and offer to take a message.",
-  "tone": "friendly",
-  "objective": "Understand what the caller needs",
-  "openingStatement": "Thank you for calling Example Office. How can I help?",
-  "transferStatement": "I will check whether someone is available.",
-  "failedTransferStatement": "No one is available. May I take a message?",
-  "locale": "en-US",
-  "didE164": "+15551234567"
-}
-```
+See [Bootstrap contract v1](docs/BOOTSTRAP_CONTRACT.md) for the exact endpoint,
+request/response and readiness schemas, limits, fail-closed behavior, upstream
+implementation requirements, and coordinated rollout. The shared
+[contract fixture](tests/fixtures/bootstrap-v1.json) is exercised by offline HTTP tests.
 
-Required: `callSessionId`, `tenantId`, `businessName`, `prompt`, `locale`,
-`didE164`. Remaining fields are optional strings, except the integer version.
-UUIDs use canonical lowercase hyphenated form. Tenant IDs are positive canonical
-decimal strings or integers within JavaScript's safe range. JSON is limited to
-16 KiB; prompt text to 12,000 characters; business name/tone to 256; other optional
-text to 2,048. Duplicate keys, nulls, booleans as numbers, wrong rooms, and
-noncanonical IDs are rejected.
+Set `AIDA_BOOTSTRAP_URL` to the authority's HTTPS origin and
+`AIDA_ROUTE_TOKEN_ATTRIBUTE` to the trunk's mapping for `X-Aida-Route-Token`.
+`AIDA_BOOTSTRAP_TIMEOUT_SECONDS` bounds all startup work (default 30, range 1–60).
+No audio turns or greeting begin until authorization, profile validation,
+muted session startup and reliable `aida.event.agent_ready` publication succeed.
+Room text input and SDK remote session hosting are disabled. SIP replacement,
+timeout, credential rejection, or readiness failure terminates the agent job.
+OfficePulse owns the corresponding PBX fallback watchdog.
 
-`transferStatement` is reserved for a future pre-bridge announcement. The
-current contract sends only bridge success/failure. This worker does not initiate
-transfers or claim they happened. On bridge success it stops immediately so the
-human can speak. There is no bootstrap-token endpoint or second settings store.
+Provider and voice selections remain deployment settings. Profile strings use
+literal JSON escaping under fixed English screening instructions; no template
+evaluation or secret interpolation occurs. `transferStatement` is reserved
+for a future confirmed pre-bridge announcement; the worker does not initiate transfers.
 
 ## Transcript contract
 
@@ -193,7 +187,9 @@ OfficePulse token authorization and SUPER ADMIN visibility.
 - [Transcript and conversation events](https://docs.livekit.io/reference/agents/events/)
 - [Data packets](https://docs.livekit.io/transport/data/packets/)
 - [Inference TTS and voice configuration](https://docs.livekit.io/agents/models/tts/cartesia/)
-- [Platform specification](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/main/docs/AIDA_VOICE_PLATFORM_TECHNICAL_SPECIFICATION.md)
+- [Unified platform plan](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/dev/docs/PLATFORM_MASTER_PLAN.md)
+- [Current OfficePulse runtime API](https://github.com/localsplash/OfficePulseAidaIntegration/blob/dev/docs/PLATFORM_API.md)
+- [Agent bootstrap contract](docs/BOOTSTRAP_CONTRACT.md)
 
 ## Status-only preview
 

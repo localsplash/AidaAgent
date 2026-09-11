@@ -40,7 +40,7 @@ class ControlCommand:
 
 class ControlHandler:
     def __init__(self, call_id: str, session, disconnect, shutdown: Callable[[], None], *,
-                 failed_statement: str = "", now_ms=None):
+                 failed_statement: str = "", now_ms=None, ready: bool = True):
         self.call_id = call_id
         self.session = session
         self.disconnect = disconnect
@@ -48,6 +48,7 @@ class ControlHandler:
         self.failed_statement = failed_statement
         self.now_ms = now_ms or (lambda: int(time.time() * 1000))
         self.stopping = False
+        self.ready = ready
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._stop_task: asyncio.Task | None = None
 
@@ -65,18 +66,18 @@ class ControlHandler:
             # Stop immediately, including expired commands. Never extend a takeover
             # deadline or wait for another model turn after the human is bridged.
             self.stopping = True
-            self.session.input.set_audio_enabled(False)
-            self.session.output.set_audio_enabled(False)
-            try:
-                self.session.interrupt(force=True)
-                self.session.shutdown(drain=False)
-            except RuntimeError:
-                # The command can arrive while session.start is still in progress.
-                # The worker's startup guard and job shutdown prevent a new greeting.
-                pass
+            if self.session is not None:
+                self.session.input.set_audio_enabled(False)
+                self.session.output.set_audio_enabled(False)
+                try:
+                    self.session.interrupt(force=True)
+                    self.session.shutdown(drain=False)
+                except RuntimeError:
+                    # Startup guard prevents a greeting when start is still in progress.
+                    pass
             remaining = max(0, min(10_000, command.deadline_ms - self.now_ms())) / 1000
             self._stop_task = asyncio.create_task(self._stop(remaining))
-        elif command.deadline_ms >= self.now_ms():
+        elif self.ready and self.session is not None and command.deadline_ms >= self.now_ms():
             self.session.input.set_audio_enabled(True)
             if self.failed_statement:
                 try:

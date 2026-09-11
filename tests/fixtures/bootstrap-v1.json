@@ -1,0 +1,39 @@
+{
+  "dispatch": {
+    "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+    "bootstrapToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "request": {
+    "roomName": "aida-281c6b8e-6a61-45ba-9165-eb199825d12e",
+    "sipParticipantIdentity": "sip-caller",
+    "sipParticipantSid": "PA_sip",
+    "routeToken": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "response": {
+    "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+    "roomName": "aida-281c6b8e-6a61-45ba-9165-eb199825d12e",
+    "sipParticipantIdentity": "sip-caller",
+    "sipParticipantSid": "PA_sip",
+    "profileSnapshot": {
+      "schemaVersion": 1,
+      "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+      "tenantId": "42",
+      "businessName": "Example Office",
+      "prompt": "Ask how we can help.",
+      "tone": "friendly",
+      "objective": "Understand the caller's needs",
+      "openingStatement": "Thank you for calling.",
+      "transferStatement": "I will check whether someone is available.",
+      "failedTransferStatement": "No one is available. May I take a message?",
+      "locale": "en-US",
+      "didE164": "+15551234567"
+    }
+  },
+  "ready": {
+    "type": "aida.event.agent_ready",
+    "schemaVersion": 1,
+    "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+    "agentIdentity": "agent-1",
+    "agentParticipantSid": "PA_agent"
+  }
+}

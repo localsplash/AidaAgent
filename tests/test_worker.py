@@ -13,11 +13,11 @@ class EventSource:
     def __init__(self):
         self.handlers = {}
 
-    def on(self, name):
+    def on(self, name, callback=None):
         def register(callback):
             self.handlers[name] = callback
             return callback
-        return register
+        return register(callback) if callback else register
 
     def off(self, name, callback):
         self.handlers.pop(name, None)
@@ -27,7 +27,13 @@ class FakeRoom(EventSource):
     def __init__(self):
         super().__init__()
         self.connected = False
-        self.participant = Mock(publish_data=AsyncMock())
+        self.participant = Mock(publish_data=AsyncMock(), identity="agent-1", sid="PA_agent")
+        self.sip = SimpleNamespace(
+            identity="sip-caller", sid="PA_sip",
+            kind=worker.rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+            attributes={"sip.aidaRouteToken": "r" * 43},
+        )
+        self.remote_participants = {self.sip.identity: self.sip}
 
     @property
     def local_participant(self):
@@ -51,7 +57,7 @@ def test_real_sdk_import_model_wiring_and_sip_options_without_network(monkeypatc
 
 
 @pytest.fixture
-def runtime(monkeypatch, metadata):
+def runtime(monkeypatch, dispatch, call):
     session = EventSource()
     session.start, session.aclose, session.say = AsyncMock(), AsyncMock(), Mock()
     session.generate_reply = Mock()
@@ -62,14 +68,18 @@ def runtime(monkeypatch, metadata):
     room.name = f"aida-{CALL_ID}"
     room.disconnect = AsyncMock()
     ctx = SimpleNamespace(
-        job=SimpleNamespace(metadata=json.dumps(metadata)), room=room,
+        job=SimpleNamespace(metadata=json.dumps(dispatch)), room=room,
         proc=SimpleNamespace(userdata={"vad": "fake-vad"}),
         shutdown=Mock(), connect=AsyncMock(), add_shutdown_callback=Mock(),
     )
-    async def connect():
+    async def connect(**kwargs):
         room.connected = True
     ctx.connect.side_effect = connect
     monkeypatch.setattr(worker, "create_session", Mock(return_value=session))
+    monkeypatch.setattr(worker, "BootstrapClient", Mock(return_value=SimpleNamespace(
+        authorize=AsyncMock(return_value=call))))
+    monkeypatch.setenv("AIDA_BOOTSTRAP_URL", "https://officepulse.example")
+    monkeypatch.setenv("AIDA_ROUTE_TOKEN_ATTRIBUTE", "sip.aidaRouteToken")
     for key in ("AIDA_STT_MODEL", "AIDA_LLM_MODEL", "AIDA_TTS_MODEL", "AIDA_TTS_VOICE"):
         monkeypatch.setenv(key, "fake/model")
     return ctx, session
@@ -79,6 +89,14 @@ async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
     ctx, session = runtime
     await worker.entrypoint(ctx)
     options = session.start.call_args.kwargs["room_options"]
+    assert options.participant_identity == "sip-caller"
+    assert session.start.call_args.kwargs["session_host"] is False
+    assert ctx.connect.call_args.kwargs["auto_subscribe"] == worker.AutoSubscribe.SUBSCRIBE_NONE
+    ready = ctx.room.local_participant.publish_data.await_args_list[0]
+    assert ready.kwargs == {"topic": "aida.event.agent_ready", "reliable": True}
+    from pathlib import Path
+    contract = json.loads((Path(__file__).parent / "fixtures/bootstrap-v1.json").read_text())
+    assert json.loads(ready.args[0]) == contract["ready"]
     assert options.text_input is False
     assert options.delete_room_on_close is False
     assert options.participant_kinds == [worker.rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
@@ -92,11 +110,11 @@ async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
         item=SimpleNamespace(role="assistant", text_content="Agent words", id="agent-1")))
     import asyncio
     for _ in range(20):
-        if ctx.room.local_participant.publish_data.await_count == 2:
+        if ctx.room.local_participant.publish_data.await_count == 3:
             break
         await asyncio.sleep(0)
     events = [json.loads(args.args[0]) for args in
-              ctx.room.local_participant.publish_data.await_args_list]
+              ctx.room.local_participant.publish_data.await_args_list[1:]]
     assert [event["text"] for event in events] == ["Caller words", "Agent words"]
     assert [event["sequence"] for event in events] == [1, 2]
     await ctx.add_shutdown_callback.call_args.args[0]()
@@ -117,7 +135,7 @@ async def test_invalid_job_is_rejected_before_room_or_provider_access(runtime, c
 async def test_takeover_during_connect_prevents_session_and_greeting(runtime):
     from test_control import packet
     ctx, session = runtime
-    async def connect():
+    async def connect(**kwargs):
         ctx.room.handlers["data_received"](packet())
     ctx.connect.side_effect = connect
     await worker.entrypoint(ctx)
@@ -125,14 +143,14 @@ async def test_takeover_during_connect_prevents_session_and_greeting(runtime):
     session.say.assert_not_called()
     session.generate_reply.assert_not_called()
     await ctx.add_shutdown_callback.call_args.args[0]()
-    ctx.room.disconnect.assert_awaited_once()
+    ctx.room.disconnect.assert_awaited()
 
 
 async def test_missing_opening_still_greets_the_caller(runtime):
+    from dataclasses import replace
     ctx, session = runtime
-    metadata = json.loads(ctx.job.metadata)
-    del metadata["openingStatement"]
-    ctx.job.metadata = json.dumps(metadata)
+    authorize = worker.BootstrapClient.return_value.authorize
+    authorize.return_value = replace(authorize.return_value, opening_statement="")
     await worker.entrypoint(ctx)
     session.generate_reply.assert_called_once()
     session.say.assert_not_called()
@@ -166,3 +184,204 @@ async def test_real_inference_constructors_without_network(monkeypatch, call):
     await session.stt.aclose()
     await session.llm.aclose()
     await session.tts.aclose()
+
+
+async def test_audio_and_greeting_wait_for_ready_delivery(runtime):
+    ctx, session = runtime
+
+    async def publish(*args, **kwargs):
+        assert kwargs["topic"] == "aida.event.agent_ready"
+        session.start.assert_awaited_once()
+        session.input.set_audio_enabled.assert_called_once_with(False)
+        session.output.set_audio_enabled.assert_called_once_with(False)
+        session.say.assert_not_called()
+        session.generate_reply.assert_not_called()
+
+    ctx.room.participant.publish_data.side_effect = publish
+    await worker.entrypoint(ctx)
+    assert session.input.set_audio_enabled.call_args.args == (True,)
+    session.say.assert_called_once()
+    ctx.room.participant.publish_data.assert_awaited_once()
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+@pytest.mark.parametrize("phase", ["authorize", "start", "ready"])
+async def test_startup_failure_never_enables_audio(runtime, phase, caplog):
+    ctx, session = runtime
+    targets = {"authorize": worker.BootstrapClient.return_value.authorize,
+               "start": session.start, "ready": ctx.room.participant.publish_data}
+    targets[phase].side_effect = RuntimeError("secret-bootstrap-and-prompt")
+    await worker.entrypoint(ctx)
+    session.say.assert_not_called()
+    session.generate_reply.assert_not_called()
+    assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
+    ctx.shutdown.assert_called()
+    ctx.room.disconnect.assert_awaited()
+    assert "secret-bootstrap-and-prompt" not in caplog.text
+    assert not ctx.room.handlers
+    if phase == "authorize":
+        worker.create_session.assert_not_called()
+
+
+async def test_delayed_participant_and_attribute(runtime):
+    import asyncio
+    ctx, session = runtime
+    ctx.room.remote_participants.clear()
+    task = asyncio.create_task(worker.entrypoint(ctx))
+    try:
+        while not ctx.room.connected:
+            await asyncio.sleep(0)
+        ctx.room.sip.attributes.clear()
+        ctx.room.remote_participants[ctx.room.sip.identity] = ctx.room.sip
+        ctx.room.handlers["participant_connected"](ctx.room.sip)
+        await asyncio.sleep(0)
+        worker.BootstrapClient.return_value.authorize.assert_not_awaited()
+        ctx.room.sip.attributes["sip.aidaRouteToken"] = "r" * 43
+        ctx.room.handlers["participant_attributes_changed"]({}, ctx.room.sip)
+        await asyncio.wait_for(task, timeout=1)
+        session.say.assert_called_once()
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+@pytest.mark.parametrize("mode", ["no-sip", "no-token", "invalid-token", "multiple-sip"])
+async def test_missing_or_ambiguous_sip_fails_before_providers(runtime, monkeypatch, mode):
+    ctx, session = runtime
+    monkeypatch.setenv("AIDA_BOOTSTRAP_TIMEOUT_SECONDS", "1")
+    if mode == "no-sip":
+        ctx.room.remote_participants.clear()
+    elif mode == "no-token":
+        ctx.room.sip.attributes.clear()
+    elif mode == "invalid-token":
+        ctx.room.sip.attributes["sip.aidaRouteToken"] = "bad"
+    else:
+        ctx.room.remote_participants["other"] = SimpleNamespace(
+            kind=worker.rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+    await worker.entrypoint(ctx)
+    worker.create_session.assert_not_called()
+    ctx.room.participant.publish_data.assert_not_awaited()
+    ctx.shutdown.assert_called()
+
+
+@pytest.mark.parametrize("change", ["sid", "identity", "token", "disconnect", "extra-sip"])
+async def test_leg_change_during_authorization_fails_closed(runtime, change):
+    ctx, session = runtime
+    authorize = worker.BootstrapClient.return_value.authorize
+    profile = authorize.return_value
+
+    async def replace_leg(*args):
+        if change == "sid":
+            ctx.room.sip.sid = "PA_replacement"
+        elif change == "identity":
+            ctx.room.sip.identity = "impostor"
+        elif change == "token":
+            ctx.room.sip.attributes["sip.aidaRouteToken"] = "x" * 43
+        elif change == "disconnect":
+            ctx.room.handlers["participant_disconnected"](ctx.room.sip)
+        else:
+            ctx.room.remote_participants["other"] = SimpleNamespace(
+                kind=worker.rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+        return profile
+
+    authorize.side_effect = replace_leg
+    await worker.entrypoint(ctx)
+    worker.create_session.assert_not_called()
+    ctx.room.participant.publish_data.assert_not_awaited()
+    ctx.shutdown.assert_called()
+
+
+@pytest.mark.parametrize("phase", ["authorize", "start", "ready"])
+async def test_human_takeover_during_startup_cancels_pending_work(runtime, phase):
+    import asyncio
+    from test_control import packet
+    ctx, session = runtime
+
+    async def takeover(*args, **kwargs):
+        ctx.room.handlers["data_received"](packet())
+        await asyncio.Event().wait()
+
+    targets = {"authorize": worker.BootstrapClient.return_value.authorize,
+               "start": session.start, "ready": ctx.room.participant.publish_data}
+    targets[phase].side_effect = takeover
+    await asyncio.wait_for(worker.entrypoint(ctx), timeout=1)
+    session.say.assert_not_called()
+    session.generate_reply.assert_not_called()
+    assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
+    ctx.shutdown.assert_called()
+
+
+async def test_transfer_failure_during_startup_cannot_enable_audio(runtime):
+    from test_control import packet
+    ctx, session = runtime
+
+    async def start(**kwargs):
+        command = packet("transfer_failed", deadlineMs=9_000_000_000_000)
+        ctx.room.handlers["data_received"](command)
+        session.input.set_audio_enabled.assert_called_once_with(False)
+        session.say.assert_not_called()
+
+    session.start.side_effect = start
+    await worker.entrypoint(ctx)
+    session.say.assert_called_once_with("Thank you for calling.", allow_interruptions=True)
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+async def test_sip_replacement_after_ready_silences_session(runtime):
+    ctx, session = runtime
+    await worker.entrypoint(ctx)
+    ctx.room.sip.sid = "PA_replacement"
+    ctx.room.handlers["participant_connected"](ctx.room.sip)
+    assert session.input.set_audio_enabled.call_args.args == (False,)
+    assert session.output.set_audio_enabled.call_args.args == (False,)
+    ctx.shutdown.assert_called()
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+async def test_external_shutdown_cancels_admission(runtime):
+    import asyncio
+    ctx, session = runtime
+    ctx.room.remote_participants.clear()
+    task = asyncio.create_task(worker.entrypoint(ctx))
+    while not ctx.room.connected:
+        await asyncio.sleep(0)
+    await ctx.add_shutdown_callback.call_args.args[0]()
+    await asyncio.wait_for(task, timeout=1)
+    worker.create_session.assert_not_called()
+    assert not ctx.room.handlers
+
+
+async def test_sdk_audio_gate_survives_attaching_room_streams():
+    # Exercise the installed SDK's public IO setters, not mocks of those setters.
+    from livekit.agents.voice import io
+    input_stream = Mock(spec=io.AudioInput)
+    output_stream = Mock(spec=io.AudioOutput)
+    session = worker.AgentSession()
+    session.input.set_audio_enabled(False)
+    session.output.set_audio_enabled(False)
+    session.input.audio = input_stream
+    session.output.audio = output_stream
+    assert session.input.audio_enabled is False
+    assert session.output.audio_enabled is False
+    input_stream.on_attached.assert_not_called()
+    input_stream.on_detached.assert_called_once()
+
+
+@pytest.mark.parametrize("phase", ["connect", "authorize", "start", "ready"])
+async def test_one_deadline_covers_each_startup_phase(runtime, monkeypatch, phase):
+    import asyncio
+    ctx, session = runtime
+    monkeypatch.setenv("AIDA_BOOTSTRAP_TIMEOUT_SECONDS", "1")
+
+    async def hang(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    targets = {"connect": ctx.connect, "authorize": worker.BootstrapClient.return_value.authorize,
+               "start": session.start, "ready": ctx.room.participant.publish_data}
+    targets[phase].side_effect = hang
+    await asyncio.wait_for(worker.entrypoint(ctx), timeout=2)
+    session.say.assert_not_called()
+    assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
+    ctx.shutdown.assert_called()

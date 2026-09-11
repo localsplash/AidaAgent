@@ -3,7 +3,7 @@ import json
 import pytest
 
 from aida_agent.config import (
-    CallConfiguration, DeploymentConfiguration, InvalidConfiguration, MAX_METADATA_BYTES,
+    CallConfiguration, DeploymentConfiguration, InvalidConfiguration, MAX_PROFILE_BYTES,
 )
 from conftest import CALL_ID
 
@@ -12,12 +12,13 @@ def parse(value, room=f"aida-{CALL_ID}"):
     return CallConfiguration.parse(json.dumps(value), room)
 
 
-def test_existing_officepulse_dispatch_and_versioned_contract(metadata):
+def test_versioned_profile_contract(metadata):
     legacy = parse(metadata)
     assert legacy.tenant_id == "42"
     assert legacy.schema_version == 1
-    metadata["schemaVersion"] = 1
-    assert parse(metadata) == legacy
+    del metadata["schemaVersion"]
+    with pytest.raises(InvalidConfiguration):
+        parse(metadata)
     assert "Ask how we can help." in legacy.instructions()
     assert legacy.opening_statement == "Thank you for calling."
 
@@ -66,14 +67,14 @@ def test_missing_fields_rejected(metadata):
 
 
 @pytest.mark.parametrize("raw", ["[]", "null", "{", '{"tenantId":1,"tenantId":2}',
-                                 "[" * 2000, "x" * (MAX_METADATA_BYTES + 1)])
+                                 "[" * 2000, "x" * (MAX_PROFILE_BYTES + 1)])
 def test_invalid_serialized_metadata(raw):
     with pytest.raises(InvalidConfiguration):
         CallConfiguration.parse(raw, f"aida-{CALL_ID}")
 
 
 def test_unicode_byte_budget_and_no_prompt_in_repr(metadata):
-    metadata["prompt"] = "private-client-context" + "😀" * 4500
+    metadata["prompt"] = "private-client-context" + "😀" * 12000
     with pytest.raises(InvalidConfiguration):
         parse(metadata)
     metadata["prompt"] = "private-client-context"
