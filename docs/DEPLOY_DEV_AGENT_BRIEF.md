@@ -67,20 +67,22 @@ fallback. The worker neither reads a database/NocoDB nor controls other call leg
    merely because a development value is missing. The required settings are:
 
    ```dotenv
-   LIVEKIT_URL=wss://<development-project>
+   LIVEKIT_URL=wss://officepulse-localsplash-dev-wx1v0ch5.livekit.cloud
    LIVEKIT_API_KEY=<development-key>
    LIVEKIT_API_SECRET=<development-secret>
    AIDA_AGENT_NAME=aida-prime-bootstrap-dev
-   AIDA_STT_MODEL=<approved-STT-model>
-   AIDA_LLM_MODEL=<approved-LLM-model>
-   AIDA_TTS_MODEL=<approved-TTS-model>
-   AIDA_TTS_VOICE=<approved-voice-id>
+   AIDA_STT_MODEL=deepgram/nova-3-general
+   AIDA_LLM_MODEL=google/gemma-4-31b-it
+   AIDA_TTS_MODEL=deepgram/aura-2
+   AIDA_TTS_VOICE=asteria
    AIDA_BOOTSTRAP_URL=https://<OfficePulse-bootstrap-origin>
    AIDA_ROUTE_TOKEN_ATTRIBUTE=sip.aidaRouteToken
    AIDA_BOOTSTRAP_TIMEOUT_SECONDS=30
    ```
 
-   These are placeholders, not deployable values. Match the agent name exactly
+   The project URL and model/voice values above are the selected POC configuration.
+   Replace credential and bootstrap-origin placeholders before voice activation.
+   Match the agent name exactly
    to the new OfficePulse dispatcher; use a distinct name from existing workers.
    Match the route attribute to the actual LiveKit SIP trunk mapping for
    `X-Aida-Route-Token`. The bootstrap URL is an HTTPS origin without credentials,
@@ -163,3 +165,86 @@ bootstrap contract and dispatch name.
 
 Report: source SHA, image tag/ID, Compose path, command/mode, health result,
 registration/acceptance evidence, and remaining blockers. Report no secret values.
+
+
+## Selected LiveKit UI settings
+
+The user selected an STT–LLM–TTS pipeline: English Deepgram Nova-3 monolingual,
+Gemma 4 31B, and Deepgram Aura-2 with the Asteria US-English voice. These map to
+the environment values above; the Inference voice is `asteria`, not the direct
+Deepgram plugin's combined `aura-2-asteria-en` model identifier. The English call
+profile produces `language="en"` for STT and TTS. No keyterms are supplied;
+keyterm recognition was disabled in the screenshot.
+
+The screenshot also selects Quail VF S noise cancellation and Office background
+audio. Those preferences are recorded but **not implemented** in this worker.
+They need SDK/plugin integration, lifecycle/cleanup and takeover-silencing tests;
+there are no supported environment variables for them yet. UI configuration does
+not automatically apply to the repository-owned worker. Do not claim full audio
+parity or invent environment variables to represent unsupported features.
+
+References: [Gemma model ID](https://docs.livekit.io/agents/models/llm/),
+[Deepgram Inference TTS](https://docs.livekit.io/agents/models/tts/deepgram/),
+[noise cancellation](https://docs.livekit.io/transport/media/noise-cancellation/),
+[background audio](https://docs.livekit.io/agents/multimodality/audio/background-audio/).
+
+## OfficePulse environment handoff
+
+“OfficePulseAidaInfrastructure” is interpreted here as the runtime service
+`localsplash/OfficePulseAidaIntegration`. Verify the intended service before
+editing any environment file. At dev `ddb064e28e21728ee7019e655e5378562eb13977`,
+`src/config.ts` accepts the following LiveKit settings:
+
+```dotenv
+LIVEKIT_URL=wss://officepulse-localsplash-dev-wx1v0ch5.livekit.cloud
+LIVEKIT_API_KEY=<full-key-for-this-development-project>
+LIVEKIT_API_SECRET=<full-secret-for-this-development-project>
+LIVEKIT_AGENT_NAME=aida-prime-bootstrap-dev
+LIVEKIT_SIP_HOST=c01ntkak7mh.sip.livekit.cloud
+LIVEKIT_TIMEOUT_MS=5000
+LIVEKIT_TRUNK_ENDPOINT=<actual-Asterisk-PJSIP-endpoint-name>
+```
+
+`LIVEKIT_SIP_HOST` is the hostname only, without `sip:`. The PJSIP endpoint name
+is a PBX configuration identifier, not that SIP hostname or the LiveKit project
+ID (`p_c01ntkak7mh`). This runtime has no `LIVEKIT_PROJECT_ID` requirement.
+Both services must authenticate to the same development LiveKit project.
+`LIVEKIT_AGENT_NAME` in OfficePulse must equal `AIDA_AGENT_NAME` in the Agent.
+Keep `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL` and `AIDA_TTS_VOICE` on
+the Agent; OfficePulse does not load those variables or send provider overrides.
+
+Also resolve the actual deployment-specific settings already owned by OfficePulse:
+
+- `OFFICEPULSE_INSTANCE_ID`: stable identity of the PBX integration instance.
+- `ARI_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `ARI_APP`: actual reachable PBX ARI
+  service/account and application (the default app is `aida`). `localhost` inside
+  the integration container does not address a separate PBX host.
+- `RUNTIME_MYSQL_HOST`, `RUNTIME_MYSQL_PORT`, `RUNTIME_MYSQL_USER`,
+  `RUNTIME_MYSQL_PASSWORD`, `RUNTIME_MYSQL_DATABASE=aidacalls_db`: its runtime store.
+  Keep this separate from native Asterisk inventory/provisioning database access.
+- `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`: approved PlatformConfig access. Effective
+  settings resolve nonblank environment overrides over `officepulse`, `aida`, `*`.
+  Preserve the deployment's selected configuration mode; explicit
+  `PLATFORM_CONFIG_MODE=environment` bypasses PlatformConfig resolution and is
+  not necessary simply to override these LiveKit values.
+- `TRUSTED_SERVER_CIDRS`, `TRUSTED_PROXY_CIDRS`: actual private callers/proxies.
+  The default private HTTP port is 8085, public HTTP port 8086, FastAGI port 4573.
+  Do not publish the private administrative listener to provide agent bootstrap.
+
+Keep `VOICE_ENABLED=false` for administration/status-only deployment until PBX,
+LiveKit and the documented admission prerequisites are ready. `VOICE_ENABLED=true`
+starts voice connectors but does not implement the missing native admission path.
+Recreate the relevant container after changing environment/startup settings;
+creating a host `.env` alone is insufficient unless Compose injects it.
+
+The Agent's `AIDA_BOOTSTRAP_URL` must point to the HTTPS origin exposing the new
+call-credential-authenticated OfficePulse endpoint. This is an Agent-side variable;
+OfficePulse has no matching magic environment switch that creates the endpoint.
+Configure its public route and reverse proxy when implementing the endpoint.
+Map `X-Aida-Route-Token` to `sip.aidaRouteToken` in the LiveKit SIP configuration,
+and align the producer's token injection with that mapping. No existing OfficePulse
+route-token-attribute environment variable is defined in the inspected revision.
+
+No secret values were provided in this brief. The trimmed credentials shared in
+conversation are not usable configuration; obtain the full values through the
+approved secret source without placing them in Git or task output.

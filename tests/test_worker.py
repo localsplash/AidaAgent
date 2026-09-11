@@ -177,8 +177,8 @@ async def test_real_inference_constructors_without_network(monkeypatch, call):
     monkeypatch.setenv("LIVEKIT_API_KEY", "offline-test-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "offline-test-secret-with-at-least-32-bytes")
     config = DeploymentConfiguration(
-        "deepgram/nova-3-general", "openai/gpt-4.1-mini", "cartesia/sonic-3",
-        "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+        "deepgram/nova-3-general", "google/gemma-4-31b-it", "deepgram/aura-2",
+        "asteria",
     )
     session = worker.create_session(config, call, None)
     await session.stt.aclose()
