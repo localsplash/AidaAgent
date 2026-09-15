@@ -20,6 +20,7 @@ from .config import (
     DispatchConfiguration, InvalidConfiguration,
 )
 from .control import ControlHandler
+from .monitored_server import MonitoredAgentServer
 from .transcripts import TranscriptPublisher, TranscriptStream
 
 logger = logging.getLogger("aida_agent")
@@ -210,7 +211,16 @@ def make_server() -> AgentServer:
     agent_name = os.environ.get("AIDA_AGENT_NAME", "aida-prime")
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", agent_name):
         raise InvalidConfiguration("invalid AIDA_AGENT_NAME")
-    server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, log_level="INFO")
+    try:
+        status_port = int(os.environ.get("AIDA_STATUS_PORT", "8082"))
+        if not 1 <= status_port <= 65535 or status_port == 8081:
+            raise ValueError
+    except ValueError:
+        raise InvalidConfiguration("AIDA_STATUS_PORT must be 1-65535 and differ from SDK port 8081") from None
+    server = MonitoredAgentServer(
+        setup_fnc=prewarm, num_idle_processes=1, log_level="INFO",
+        status_host=os.environ.get("AIDA_STATUS_HOST", "0.0.0.0"), status_port=status_port,
+    )
     server.rtc_session(agent_name=agent_name)(entrypoint)
     return server
 
