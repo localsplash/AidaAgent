@@ -11,6 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies, run fake-provider tests, and check worker CLI
-        run: docker build --target test --tag aida-agent:test .
+        run: |
+          scripts/with-build-info.sh sh -c 'docker build --target test --tag aida-agent:test \
+            --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY .'
       - name: Build non-root runtime image
-        run: docker build --target runtime --tag aida-agent:runtime .
+        run: |
+          scripts/with-build-info.sh sh -c 'docker build --target runtime --tag aida-agent:runtime \
+            --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY .'

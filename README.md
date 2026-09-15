@@ -33,14 +33,14 @@ OfficePulse/PBX SIP path into that project's rooms.
 ```sh
 cp .env.example .env
 # Set LiveKit credentials, bootstrap URL/attribute, and model/voice choices in .env.
-docker compose build
-docker compose up -d
+scripts/with-build-info.sh docker compose build
+scripts/with-build-info.sh docker compose up -d
 docker compose ps
 ```
 
 This is an **outbound worker**: NPM needs no `*.localsplash.dev` hostname for it.
-Port 8081 is exposed only on its Docker network for SDK process health. Healthy
-process status does not validate SIP audio, dispatch, or inference.
+Ports 8081 (SDK health) and 8082 (application diagnostics) are exposed only on its
+Docker network. Process health alone does not validate SIP audio or inference.
 
 `AIDA_AGENT_NAME` defaults to `aida-prime` and must match OfficePulse's
 `LIVEKIT_AGENT_NAME`. Alongside a pre-existing cloud agent, use `aida-prime-dev`
@@ -201,5 +201,103 @@ setting names only. Supplying every setting does not activate voice: explicitly
 restart with `aida-agent start` after configuring and validating the providers.
 Use `preview --host 127.0.0.1 --port 8081` for a local-only status listener.
 
-Normal `start` and `dev` behavior is unchanged. The status service is internal
-in the development preview and does not require an NPM hostname.
+The preview status service is internal and does not require an NPM hostname.
+Production `start` and `dev` additionally expose the diagnostics described below.
+
+## Source version and Pacific timezone
+
+Worker diagnostics and preview `/healthz` and `/readyz` include `version` (`YYYY.M.D.H.M`), full Git
+`revision`, `sourceUpdatedAt` (Pacific ISO 8601 offset), `timeZone`
+(`America/Los_Angeles`), and `dirty`, alongside the existing preview fields.
+Preview readiness still returns 503 and never claims voice is enabled.
+
+The production worker's port 8081 `/` is owned by LiveKit and retains its existing
+SDK health semantics. Use `aida-agent version` (or `--version`) to inspect the
+same installed artifact identity in worker mode, for example:
+
+```sh
+docker compose exec aida-agent aida-agent version
+```
+
+This command, like preview, does not import/register the voice SDK or call providers.
+The diagnostic listener is internal to the Docker network. Python package builds (`pip install .` or
+wheels) stamp HEAD's committer timestamp, not build time. Versions are always Pacific
+(PST/PDT); runtime local timezone defaults to Pacific and respects an explicit `TZ`.
+Docker includes timezone data. Existing UTC transcript/protocol timestamps preserve
+their storage semantics. Source-only development reports `unbuilt` with null metadata.
+
+The commit clock belongs to the machine creating the commit (including GitHub for
+web-created commits). Rebuilding the same commit keeps its version; dirty source
+adds `-dirty`. Full `revision` distinguishes commits in the same minute and the
+repeated autumn DST hour. Package SemVer stays separate from the source version.
+
+Containers and source archives must supply `BUILD_REVISION` (full SHA),
+`SOURCE_DATE_EPOCH` (committer epoch), and `BUILD_DIRTY` (`true` or `false`). Missing
+or malformed identity fails the build. The wrapper reads these from the checkout:
+
+```sh
+scripts/with-build-info.sh sh -c 'docker build --target runtime \
+  --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY \
+  -t aida-agent:local .'
+scripts/with-build-info.sh docker compose up -d --build
+```
+
+External orchestrators building this Dockerfile must forward the same build args.
+Installed packages need neither Git nor runtime version environment variables.
+
+
+## Worker HTTP diagnostics
+
+Production `start` and `dev` serve an application-owned HTTP listener on
+`AIDA_STATUS_HOST=0.0.0.0`, `AIDA_STATUS_PORT=8082`. Compose exposes it on the private
+Docker network without publishing a host port. The SDK keeps its existing 8081
+listener and health semantics. The application port must differ from the SDK port.
+
+- `GET /healthz` or `/status`: 200 while the worker event loop and HTTP listener
+  are responding, including during startup or LiveKit reconnection.
+- `GET /readyz`: 200 only after WebSocket registration, while that socket is open,
+  the worker is not draining/stopping, and the SDK's loopback health check returns
+  200. Otherwise 503. The SDK probe has a 500 ms timeout and ignores proxy env vars.
+
+Every response has `Cache-Control: no-store`, the source version fields, `mode`,
+Pacific `startedAt`, `uptimeSeconds`, `draining`, and aggregate diagnostics:
+
+```json
+{
+  "connection": {"state": "connected", "connected": true, "connections": 2},
+  "sessions": {
+    "started": 12,
+    "active": 2,
+    "processed": 10,
+    "completed": 9,
+    "failed": 1,
+    "scope": "since_process_start"
+  }
+}
+```
+
+Connection state is `starting`, `connecting`, `connected`, `reconnecting`, `failed`,
+`stopping`, or `stopped`. `connections` counts successful registered socket sessions,
+including reconnections. A dropped socket immediately makes readiness false; a
+previous successful registration alone never implies current connectivity.
+
+Session counts refer to **dispatched LiveKit jobs**, observed in the parent worker
+across its job subprocesses. `processed = completed + failed`; processed excludes
+currently active jobs. These are SDK outcomes: an admission rejection or normal
+hangup can end a job successfully, so completed does not mean a successful business
+call. Counters reset on process restart and are per replica, not database totals.
+No call IDs, room names, credentials, provider errors, or transcripts are returned.
+
+```sh
+# Query the running worker from its container without exposing another public port:
+scripts/with-build-info.sh docker compose exec aida-agent python -c \
+  'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8082/healthz").read().decode())'
+```
+
+`monitored_server.py` isolates three internal hooks in pinned `livekit-agents==1.8.0`
+to observe registered WebSocket lifetime and parent-process job status; the SDK has
+no public disconnect/job-status events. A version guard requires review when the SDK
+is upgraded. Offline tests exercise the actual SDK against a loopback WebSocket
+server, readiness during reconnect/drain, job completion/failure deduplication, and
+listener cleanup. The SDK's dispatch, retries, job execution and shutdown handlers
+still perform their original work.
