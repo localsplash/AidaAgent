@@ -203,3 +203,44 @@ Use `preview --host 127.0.0.1 --port 8081` for a local-only status listener.
 
 Normal `start` and `dev` behavior is unchanged. The status service is internal
 in the development preview and does not require an NPM hostname.
+
+## Source version and Pacific timezone
+
+Preview `/healthz` and `/readyz` include `version` (`YYYY.M.D.H.M`), full Git
+`revision`, `sourceUpdatedAt` (Pacific ISO 8601 offset), `timeZone`
+(`America/Los_Angeles`), and `dirty`, alongside the existing preview fields.
+Preview readiness still returns 503 and never claims voice is enabled.
+
+The production worker's port 8081 `/` is owned by LiveKit and retains its existing
+SDK health semantics. Use `aida-agent version` (or `--version`) to inspect the
+same installed artifact identity in worker mode, for example:
+
+```sh
+docker compose exec aida-agent aida-agent version
+```
+
+This command, like preview, does not import/register the voice SDK or call providers.
+No extra public listener is introduced. Python package builds (`pip install .` or
+wheels) stamp HEAD's committer timestamp, not build time. Versions are always Pacific
+(PST/PDT); runtime local timezone defaults to Pacific and respects an explicit `TZ`.
+Docker includes timezone data. Existing UTC transcript/protocol timestamps preserve
+their storage semantics. Source-only development reports `unbuilt` with null metadata.
+
+The commit clock belongs to the machine creating the commit (including GitHub for
+web-created commits). Rebuilding the same commit keeps its version; dirty source
+adds `-dirty`. Full `revision` distinguishes commits in the same minute and the
+repeated autumn DST hour. Package SemVer stays separate from the source version.
+
+Containers and source archives must supply `BUILD_REVISION` (full SHA),
+`SOURCE_DATE_EPOCH` (committer epoch), and `BUILD_DIRTY` (`true` or `false`). Missing
+or malformed identity fails the build. The wrapper reads these from the checkout:
+
+```sh
+scripts/with-build-info.sh sh -c 'docker build --target runtime \
+  --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY \
+  -t aida-agent:local .'
+scripts/with-build-info.sh docker compose up -d --build
+```
+
+External orchestrators building this Dockerfile must forward the same build args.
+Installed packages need neither Git nor runtime version environment variables.

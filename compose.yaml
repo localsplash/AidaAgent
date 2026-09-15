@@ -3,8 +3,14 @@ services:
     build:
       context: .
       target: runtime
+      args:
+        BUILD_REVISION: ${BUILD_REVISION:?Export Git HEAD before building}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:?Export Git committer epoch before building}
+        BUILD_DIRTY: ${BUILD_DIRTY:?Export Git dirty state before building}
     restart: unless-stopped
     env_file: .env
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
     init: true
     stop_grace_period: 60s
     # Outbound worker registration only. NPM does not need a hostname for this app.
