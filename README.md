@@ -94,9 +94,16 @@ Set `AIDA_BOOTSTRAP_URL` to the authority's HTTPS origin and
 `AIDA_BOOTSTRAP_TIMEOUT_SECONDS` bounds all startup work (default 30, range 1–60).
 No audio turns or greeting begin until authorization, profile validation,
 muted session startup and reliable `aida.event.agent_ready` publication succeed.
+After bootstrap, the worker explicitly subscribes only to the bound SIP leg's
+microphone audio and waits for the subscription before publishing readiness.
+Missing audio shares the startup deadline; loss of subscribed audio ends the job.
 Room text input and SDK remote session hosting are disabled. SIP replacement,
 timeout, credential rejection, or readiness failure terminates the agent job.
 OfficePulse owns the corresponding PBX fallback watchdog.
+
+INFO lifecycle diagnostics include the call session ID, startup stages, final STT
+event counts, assistant item counts, and whether a provider error is recoverable.
+They never include speech text, profile content, credentials, or exception messages.
 
 Provider and voice selections remain deployment settings. Profile strings use
 literal JSON escaping under fixed English screening instructions; no template

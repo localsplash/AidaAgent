@@ -32,7 +32,18 @@ class FakeRoom(EventSource):
             identity="sip-caller", sid="PA_sip",
             kind=worker.rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
             attributes={"sip.aidaRouteToken": "r" * 43},
+            track_publications={},
         )
+        self.audio = SimpleNamespace(
+            sid="TR_sip_audio", kind=worker.rtc.TrackKind.KIND_AUDIO,
+            source=worker.rtc.TrackSource.SOURCE_MICROPHONE, track=None,
+        )
+        def subscribed(enabled):
+            self.audio.track = object() if enabled else None
+            if enabled:
+                self.handlers["track_subscribed"](self.audio.track, self.audio, self.sip)
+        self.audio.set_subscribed = Mock(side_effect=subscribed)
+        self.sip.track_publications[self.audio.sid] = self.audio
         self.remote_participants = {self.sip.identity: self.sip}
 
     @property
@@ -93,6 +104,7 @@ async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
     assert session.start.call_args.kwargs["session_host"] is False
     assert ctx.connect.call_args.kwargs["auto_subscribe"] == worker.AutoSubscribe.SUBSCRIBE_NONE
     ready = ctx.room.local_participant.publish_data.await_args_list[0]
+    ctx.room.audio.set_subscribed.assert_called_once_with(True)
     assert ready.kwargs == {"topic": "aida.event.agent_ready", "reliable": True}
     from pathlib import Path
     contract = json.loads((Path(__file__).parent / "fixtures/bootstrap-v1.json").read_text())
@@ -192,6 +204,7 @@ async def test_audio_and_greeting_wait_for_ready_delivery(runtime):
     async def publish(*args, **kwargs):
         assert kwargs["topic"] == "aida.event.agent_ready"
         session.start.assert_awaited_once()
+        assert ctx.room.audio.track is not None
         session.input.set_audio_enabled.assert_called_once_with(False)
         session.output.set_audio_enabled.assert_called_once_with(False)
         session.say.assert_not_called()
@@ -385,3 +398,127 @@ async def test_one_deadline_covers_each_startup_phase(runtime, monkeypatch, phas
     session.say.assert_not_called()
     assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
     ctx.shutdown.assert_called()
+
+
+async def test_subscription_is_scoped_to_bootstrapped_sip_microphone(runtime):
+    ctx, session = runtime
+    room = ctx.room
+    video = SimpleNamespace(sid="TR_video", kind=worker.rtc.TrackKind.KIND_VIDEO,
+                            source=worker.rtc.TrackSource.SOURCE_CAMERA, track=None,
+                            set_subscribed=Mock())
+    screen_audio = SimpleNamespace(sid="TR_screen", kind=worker.rtc.TrackKind.KIND_AUDIO,
+                                  source=worker.rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO,
+                                  track=None, set_subscribed=Mock())
+    room.sip.track_publications.update({p.sid: p for p in (video, screen_audio)})
+    other_audio = SimpleNamespace(sid="TR_other", kind=worker.rtc.TrackKind.KIND_AUDIO,
+                                 source=worker.rtc.TrackSource.SOURCE_MICROPHONE,
+                                 track=None, set_subscribed=Mock())
+    other = SimpleNamespace(identity="handset", sid="PA_handset",
+                            kind=worker.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+                            track_publications={other_audio.sid: other_audio})
+    room.remote_participants[other.identity] = other
+    authorize = worker.BootstrapClient.return_value.authorize
+    profile = authorize.return_value
+
+    async def authorize_before_audio(*args):
+        room.handlers["track_published"](room.audio, room.sip)
+        room.audio.set_subscribed.assert_not_called()
+        return profile
+
+    authorize.side_effect = authorize_before_audio
+    await worker.entrypoint(ctx)
+    room.handlers["track_published"](other_audio, other)
+    room.audio.set_subscribed.assert_called_once_with(True)
+    for publication in (video, screen_audio, other_audio):
+        publication.set_subscribed.assert_not_called()
+    await ctx.add_shutdown_callback.call_args.args[0]()
+    assert room.audio.set_subscribed.call_args.args == (False,)
+
+
+async def test_ready_waits_for_late_audio_publication_and_subscription_ack(runtime):
+    import asyncio
+    ctx, session = runtime
+    room = ctx.room
+    room.sip.track_publications.clear()
+    room.audio.set_subscribed.side_effect = None
+    task = asyncio.create_task(worker.entrypoint(ctx))
+    try:
+        while not session.start.await_count:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        room.participant.publish_data.assert_not_awaited()
+        session.say.assert_not_called()
+        room.sip.track_publications[room.audio.sid] = room.audio
+        room.handlers["track_published"](room.audio, room.sip)
+        await asyncio.sleep(0)
+        room.audio.set_subscribed.assert_called_once_with(True)
+        room.participant.publish_data.assert_not_awaited()
+        room.audio.track = object()
+        room.handlers["track_subscribed"](room.audio.track, room.audio, room.sip)
+        await asyncio.wait_for(task, 1)
+        room.participant.publish_data.assert_awaited_once()
+        session.say.assert_called_once()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "subscription-failed", "takeover"])
+async def test_unavailable_audio_never_signals_readiness(runtime, monkeypatch, failure, caplog):
+    import asyncio
+    from test_control import packet
+    ctx, session = runtime
+    monkeypatch.setenv("AIDA_BOOTSTRAP_TIMEOUT_SECONDS", "1")
+    room = ctx.room
+    room.audio.set_subscribed.side_effect = None
+    task = asyncio.create_task(worker.entrypoint(ctx))
+    try:
+        while not room.audio.set_subscribed.call_count:
+            await asyncio.sleep(0)
+        if failure == "subscription-failed":
+            room.handlers["track_subscription_failed"](room.sip, room.audio.sid,
+                                                        "private-provider-details")
+        elif failure == "takeover":
+            room.handlers["data_received"](packet())
+        await asyncio.wait_for(task, 2)
+        room.participant.publish_data.assert_not_awaited()
+        session.say.assert_not_called()
+        ctx.shutdown.assert_called()
+        assert "private-provider-details" not in caplog.text
+        assert all(c.args == (False,) for c in session.input.set_audio_enabled.call_args_list)
+        assert not room.handlers
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_lost_authorized_audio_ends_ready_session(runtime):
+    ctx, session = runtime
+    await worker.entrypoint(ctx)
+    ctx.room.handlers["track_unsubscribed"](ctx.room.audio.track, ctx.room.audio, ctx.room.sip)
+    ctx.shutdown.assert_called()
+    assert session.input.set_audio_enabled.call_args.args == (False,)
+    assert session.output.set_audio_enabled.call_args.args == (False,)
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+async def test_lifecycle_diagnostics_count_stt_without_call_content(runtime, caplog):
+    import logging
+    ctx, session = runtime
+    caplog.set_level(logging.INFO, logger="aida_agent")
+    await worker.entrypoint(ctx)
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(transcript="private-caller-words", is_final=True))
+    session.handlers["conversation_item_added"](SimpleNamespace(
+        item=SimpleNamespace(role="assistant", text_content="private-agent-words", id="item")))
+    session.handlers["error"](SimpleNamespace(error=SimpleNamespace(
+        recoverable=True, message="private-provider-details")))
+    await ctx.add_shutdown_callback.call_args.args[0]()
+    closing = next(r for r in caplog.records if getattr(r, "event", None) == "closing")
+    assert closing.sttFinalEvents == closing.assistantItems == 1
+    assert closing.callSessionId == CALL_ID
+    records = str([r.__dict__ for r in caplog.records])
+    assert "private-caller-words" not in records
+    assert "private-agent-words" not in records
+    assert "private-provider-details" not in records
