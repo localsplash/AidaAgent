@@ -4,34 +4,102 @@ import pytest
 
 from aida_agent.config import (
     CallConfiguration, DeploymentConfiguration, InvalidConfiguration, MAX_PROFILE_BYTES,
+    OPTIONAL, REQUIRED,
 )
-from conftest import CALL_ID
+from conftest import CALL_ID, CONTEXT, PBX_INSTANCE_ID
 
 
 def parse(value, room=f"aida-{CALL_ID}"):
     return CallConfiguration.parse(json.dumps(value), room)
 
 
+def test_v2_key_sets_match_contract():
+    # CONTRACT §5: exact v2 snapshot keys; nothing else is accepted.
+    assert REQUIRED == {"schemaVersion", "callSessionId", "pbxInstanceId", "context",
+                        "businessName", "prompt", "locale", "didE164"}
+    assert OPTIONAL == {"tenantId", "tone", "objective", "openingStatement",
+                        "transferStatement", "failedTransferStatement"}
+
+
 def test_versioned_profile_contract(metadata):
-    legacy = parse(metadata)
-    assert legacy.tenant_id == "42"
-    assert legacy.schema_version == 1
+    call = parse(metadata)
+    assert call.schema_version == 2
+    assert (call.pbx_instance_id, call.context) == (PBX_INSTANCE_ID, CONTEXT)
+    assert call.tenant_id == "42"
+    assert "Ask how we can help." in call.instructions()
+    assert call.opening_statement == "Thank you for calling."
     del metadata["schemaVersion"]
     with pytest.raises(InvalidConfiguration):
         parse(metadata)
-    assert "Ask how we can help." in legacy.instructions()
-    assert legacy.opening_statement == "Thank you for calling."
 
 
-@pytest.mark.parametrize("tenant", [1, "1", 9007199254740991, "9007199254740991"])
+@pytest.mark.parametrize("version", [1, 3, "2", 2.0, True, None])
+def test_only_schema_version_2_is_accepted(metadata, version):
+    # v1 snapshots (no routing scope) are no longer accepted anywhere.
+    metadata["schemaVersion"] = version
+    with pytest.raises(InvalidConfiguration, match="schema version"):
+        parse(metadata)
+
+
+def test_v1_snapshot_shape_rejected(metadata):
+    metadata["schemaVersion"] = 1
+    del metadata["pbxInstanceId"], metadata["context"]
+    with pytest.raises(InvalidConfiguration):
+        parse(metadata)
+
+
+@pytest.mark.parametrize("key", ["pbxInstanceId", "context", "schemaVersion", "prompt",
+                                 "callSessionId", "businessName", "locale", "didE164"])
+def test_missing_fields_rejected(metadata, key):
+    del metadata[key]
+    with pytest.raises(InvalidConfiguration):
+        parse(metadata)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("pbxInstanceId", "a"), ("pbxInstanceId", "A-b_c.9" * 10), ("pbxInstanceId", "x" * 80),
+    ("context", "a"), ("context", "Office_1.x-y"), ("context", "x" * 40),
+])
+def test_scope_grammar_accepted(metadata, key, value):
+    metadata[key] = value
+    assert getattr(parse(metadata), {"pbxInstanceId": "pbx_instance_id",
+                                     "context": "context"}[key]) == value
+
+
+@pytest.mark.parametrize("key,value", [
+    ("pbxInstanceId", ""), ("pbxInstanceId", "x" * 81), ("pbxInstanceId", "a/b"),
+    ("pbxInstanceId", "a b"), ("pbxInstanceId", "ä"), ("pbxInstanceId", 1),
+    ("pbxInstanceId", None), ("pbxInstanceId", ["officepulse-dev"]),
+    ("context", ""), ("context", "x" * 41), ("context", "from carrier"), ("context", "a/b"),
+    ("context", "x\n"), ("context", "ctx\x00"), ("context", 7), ("context", None),
+    ("context", {"name": "example-office"}),
+])
+def test_scope_grammar_rejected(metadata, key, value):
+    metadata[key] = value
+    with pytest.raises(InvalidConfiguration) as error:
+        parse(metadata)
+    assert "officepulse" not in str(error.value)
+
+
+def test_tenant_is_optional_customer_identity(metadata):
+    del metadata["tenantId"]
+    call = parse(metadata)
+    assert call.tenant_id == ""
+    assert (call.pbx_instance_id, call.context) == (PBX_INSTANCE_ID, CONTEXT)
+    assert "tenant" not in call.instructions().lower()
+
+
+@pytest.mark.parametrize("tenant", ["1", "42", "9007199254740991"])
 def test_safe_canonical_tenants(metadata, tenant):
     metadata["tenantId"] = tenant
-    assert parse(metadata).tenant_id == str(tenant)
+    assert parse(metadata).tenant_id == tenant
 
 
-@pytest.mark.parametrize("tenant", [True, False, 0, -1, 1.5, 1.0, "01", "+1", "1.0", " 1",
-                                    "1 ", "0", "", None, {}, [], "9007199254740992"])
-def test_ambiguous_tenant_ids_rejected(metadata, tenant):
+@pytest.mark.parametrize("tenant", [1, 42, 9007199254740991, True, False, 0, -1, 1.5, 1.0,
+                                    "01", "+1", "1.0", " 1", "1 ", "0", "", None, {}, [],
+                                    "9007199254740992"])
+def test_non_canonical_tenant_ids_rejected(metadata, tenant):
+    # Present-but-invalid is rejected; only absence means "no tenant identity".
     metadata["tenantId"] = tenant
     with pytest.raises(InvalidConfiguration):
         parse(metadata)
@@ -40,7 +108,9 @@ def test_ambiguous_tenant_ids_rejected(metadata, tenant):
 @pytest.mark.parametrize("key,value", [
     ("apiKey", "top-secret"), ("model", "other/model"), ("stt", {"apiKey": "secret"}),
     ("voice", "expensive-voice"), ("LIVEKIT_API_SECRET", "private"),
-    ("schemaVersion", 2), ("schemaVersion", True), ("schemaVersion", "1"),
+    ("iTenantId", 42), ("didContext", "from-bandwidth"), ("ingressContext", "from-bandwidth"),
+    ("queue", "example-office.sales"), ("profileId", "p1"),
+    ("schemaVersion", 1), ("schemaVersion", True), ("schemaVersion", "2"),
     ("prompt", 123), ("prompt", ""), ("prompt", "x" * 12001), ("tone", {}),
     ("openingStatement", None), ("businessName", " "), ("locale", "en_US"),
     ("didE164", "5551234567"), ("callSessionId", "not-a-uuid"),
@@ -58,12 +128,6 @@ def test_allowlist_and_types(metadata, key, value):
 def test_cross_call_room_rejected(metadata):
     with pytest.raises(InvalidConfiguration, match="room"):
         parse(metadata, "aida-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-
-
-def test_missing_fields_rejected(metadata):
-    del metadata["prompt"]
-    with pytest.raises(InvalidConfiguration):
-        parse(metadata)
 
 
 @pytest.mark.parametrize("raw", ["[]", "null", "{", '{"tenantId":1,"tenantId":2}',

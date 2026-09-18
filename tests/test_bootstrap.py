@@ -1,18 +1,12 @@
 import asyncio
 import json
-from pathlib import Path
 
 from aiohttp import web
 import pytest
 
 from aida_agent.bootstrap import BootstrapClient, MAX_RESPONSE_BYTES, SipLeg, authorized_profile
 from aida_agent.config import BootstrapConfiguration, DispatchConfiguration, InvalidConfiguration
-from conftest import CALL_ID
-
-
-@pytest.fixture
-def contract():
-    return json.loads((Path(__file__).parent / "fixtures/bootstrap-v1.json").read_text())
+from conftest import CALL_ID, CONTEXT, PBX_INSTANCE_ID
 
 
 @pytest.fixture
@@ -28,20 +22,53 @@ def bound(contract):
 def test_exact_dispatch_contract(dispatch):
     parsed = DispatchConfiguration.parse(json.dumps(dispatch), f"aida-{CALL_ID}")
     assert parsed.call_id == CALL_ID
+    assert (parsed.pbx_instance_id, parsed.context) == (PBX_INSTANCE_ID, CONTEXT)
     assert dispatch["bootstrapToken"] not in repr(parsed)
 
 
+def test_shared_fixture_dispatch_is_v2(contract):
+    assert set(contract["dispatch"]) == {"callSessionId", "bootstrapToken", "pbxInstanceId",
+                                         "context"}
+    parsed = DispatchConfiguration.parse(json.dumps(contract["dispatch"]),
+                                         contract["request"]["roomName"])
+    assert (parsed.pbx_instance_id, parsed.context) == ("officepulse-dev", "example-office")
+    assert contract["response"]["profileSnapshot"]["schemaVersion"] == 2
+
+
+@pytest.mark.parametrize("key", ["pbxInstanceId", "context"])
+def test_dispatch_requires_scope(dispatch, key):
+    # Scope is never inferred: a dispatch without it (including the v1 shape) is rejected.
+    del dispatch[key]
+    with pytest.raises(InvalidConfiguration, match="dispatch fields"):
+        DispatchConfiguration.parse(json.dumps(dispatch), f"aida-{CALL_ID}")
+
+
 @pytest.mark.parametrize("key,value", [
-    ("schemaVersion", 1), ("prompt", "instructions"), ("tenantId", "42"),
+    ("schemaVersion", 1), ("prompt", "instructions"), ("tenantId", "42"), ("iTenantId", 42),
+    ("didContext", "from-bandwidth"), ("ingressContext", "from-bandwidth"),
     ("model", "override"), ("stt", {}), ("tts", {}), ("voice", "override"),
     ("credentials", {}), ("bootstrapToken", ""), ("bootstrapToken", None),
     ("bootstrapToken", "short"), ("bootstrapToken", "x" * 257),
     ("bootstrapToken", "x" * 43 + "\r\n"), ("callSessionId", CALL_ID.upper()),
+    ("pbxInstanceId", ""), ("pbxInstanceId", "x" * 81), ("pbxInstanceId", "a/b"),
+    ("pbxInstanceId", "a b"), ("pbxInstanceId", None), ("pbxInstanceId", 1),
+    ("context", ""), ("context", "x" * 41), ("context", "from carrier"), ("context", "a/b"),
+    ("context", "ctx\n"), ("context", None), ("context", 7), ("context", ["example-office"]),
 ])
 def test_dispatch_rejects_unknown_fields_and_malformed_credentials(dispatch, key, value):
     dispatch[key] = value
     with pytest.raises(InvalidConfiguration):
         DispatchConfiguration.parse(json.dumps(dispatch), f"aida-{CALL_ID}")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("pbxInstanceId", "x" * 80), ("pbxInstanceId", "PBX_1.a-b"),
+    ("context", "x" * 40), ("context", "Tenant_7.x-y"),
+])
+def test_dispatch_scope_grammar_boundaries(dispatch, key, value):
+    dispatch[key] = value
+    parsed = DispatchConfiguration.parse(json.dumps(dispatch), f"aida-{CALL_ID}")
+    assert getattr(parsed, {"pbxInstanceId": "pbx_instance_id", "context": "context"}[key]) == value
 
 
 @pytest.mark.parametrize("raw", [
@@ -76,14 +103,65 @@ def test_response_must_match_observed_leg(contract, bound, key):
 
 
 @pytest.mark.parametrize("key,value", [
-    ("schemaVersion", 2), ("schemaVersion", True), ("schemaVersion", None),
+    ("schemaVersion", 1), ("schemaVersion", True), ("schemaVersion", None),
     ("locale", "es-US"), ("apiKey", "secret"), ("model", "override"),
     ("stt", {}), ("tts", {}), ("voice", "override"), ("credentials", {}),
     ("callSessionId", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+    ("tenantId", 42), ("tenantId", ""), ("tenantId", None),
 ])
 def test_invalid_authorized_profiles(contract, bound, key, value):
     contract["response"]["profileSnapshot"][key] = value
     with pytest.raises(InvalidConfiguration):
+        authorized_profile(json.dumps(contract["response"]).encode(), *bound)
+
+
+@pytest.mark.parametrize("key", ["pbxInstanceId", "context"])
+def test_v1_profile_without_scope_rejected(contract, bound, key):
+    del contract["response"]["profileSnapshot"][key]
+    with pytest.raises(InvalidConfiguration, match="allowlist"):
+        authorized_profile(json.dumps(contract["response"]).encode(), *bound)
+
+
+def test_authorized_profile_without_tenant(contract, bound):
+    # tenantId is optional customer identity; admission does not depend on it.
+    del contract["response"]["profileSnapshot"]["tenantId"]
+    call = authorized_profile(json.dumps(contract["response"]).encode(), *bound)
+    assert call.tenant_id == ""
+    assert (call.pbx_instance_id, call.context) == (bound[0].pbx_instance_id, bound[0].context)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("pbxInstanceId", "officepulse-other"), ("context", "other-office"),
+    ("pbxInstanceId", "Officepulse-dev"), ("context", "Example-Office"),
+    ("context", "example-office."), ("pbxInstanceId", "officepulse-dev2"),
+], ids=["instance", "context", "instance-case", "context-case", "context-suffix",
+        "instance-suffix"])
+def test_profile_scope_must_match_dispatch(contract, bound, key, value):
+    contract["response"]["profileSnapshot"][key] = value
+    with pytest.raises(InvalidConfiguration, match="bootstrap scope mismatch") as error:
+        authorized_profile(json.dumps(contract["response"]).encode(), *bound)
+    assert value not in str(error.value)
+
+
+def test_same_context_on_another_pbx_instance_is_a_different_scope(contract):
+    # Dispatch pins {pbxInstanceId, context}; an identical context name elsewhere is foreign.
+    request = contract["request"]
+    dispatch = {**contract["dispatch"], "pbxInstanceId": "officepulse-prod"}
+    bound = (
+        DispatchConfiguration.parse(json.dumps(dispatch), request["roomName"]),
+        request["roomName"],
+        SipLeg(request["sipParticipantIdentity"], request["sipParticipantSid"], request["routeToken"]),
+    )
+    assert contract["response"]["profileSnapshot"]["context"] == bound[0].context
+    with pytest.raises(InvalidConfiguration, match="bootstrap scope mismatch"):
+        authorized_profile(json.dumps(contract["response"]).encode(), *bound)
+
+
+def test_scope_mismatch_checked_after_binding(contract, bound):
+    # A wrong room/leg is reported as a binding error before any scope comparison.
+    contract["response"]["roomName"] = "wrong"
+    contract["response"]["profileSnapshot"]["context"] = "other-office"
+    with pytest.raises(InvalidConfiguration, match="binding mismatch"):
         authorized_profile(json.dumps(contract["response"]).encode(), *bound)
 
 
@@ -159,9 +237,25 @@ async def test_real_http_contract_and_single_use_mock_authority(serve, contract,
     client = await serve(handler)
     call = await client.authorize(*bound)
     assert call.business_name == "Example Office"
+    assert (call.pbx_instance_id, call.context) == ("officepulse-dev", "example-office")
+    assert call.tenant_id == "42"
     with pytest.raises(InvalidConfiguration):
         await client.authorize(*bound)
     assert len(requests) == 2  # One request per invocation, no automatic retries.
+
+
+async def test_http_scope_mismatch_fails_closed_without_retry(serve, contract, bound):
+    requests = []
+
+    async def handler(request):
+        requests.append(request.path)
+        contract["response"]["profileSnapshot"]["pbxInstanceId"] = "officepulse-other"
+        return web.json_response(contract["response"])
+
+    client = await serve(handler)
+    with pytest.raises(InvalidConfiguration, match="bootstrap scope mismatch"):
+        await client.authorize(*bound)
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 400, 401, 403, 409, 410, 429, 500, 503])

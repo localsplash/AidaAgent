@@ -1,10 +1,34 @@
-# Agent bootstrap contract v1
+# Agent bootstrap contract v2
 
-This is the consumer contract implemented for AidaAgent #7 and #2. It is a
-breaking replacement for the inline business metadata in Agent PR #8.
-The executable cross-repository example is
-[`tests/fixtures/bootstrap-v1.json`](../tests/fixtures/bootstrap-v1.json).
-Its credentials are deliberately fake.
+This is the consumer contract implemented for AidaAgent #7 and #2 and revised
+for AidaAgent #12 (Asterisk context replaces tenant as the call-routing scope,
+coordinated with OfficePulseAidaIntegration #22 and AidaAdmin #42). It is a
+breaking replacement for the inline business metadata in Agent PR #8 and for the
+v1 dispatch/snapshot shapes. The executable cross-repository example is
+[`tests/fixtures/bootstrap-v2.json`](../tests/fixtures/bootstrap-v2.json),
+byte-identical to OfficePulse's copy. Its credentials are deliberately fake.
+
+## Routing scope
+
+The routing scope of a call is the pair **`{pbxInstanceId, context}`**:
+
+- `pbxInstanceId` is the OfficePulse deployment serving one Asterisk host
+  (`OFFICEPULSE_INSTANCE_ID`); grammar `^[A-Za-z0-9_.-]{1,80}$`.
+- `context` is the Asterisk dialplan **extension context** that owns the
+  business's endpoints and queue-ownership markers; grammar
+  `^[a-zA-Z0-9_.-]{1,40}$`. Comparison is exact and case-sensitive.
+
+The same context name on another PBX instance is a different scope. The carrier
+ingress context (`didContext`) is never a business scope and never appears in
+dispatch or snapshot. `tenantId` is **not** a routing key: it is optional
+customer identity retained for authorization/observation by OfficePulse and
+AidaAdmin, and the worker neither requires it nor selects anything by it.
+
+The worker takes scope only from the trusted dispatch metadata and requires the
+authorized profile to match it. It never infers scope from caller ID, dialled
+number, room metadata, or participant attributes. A supplied scope string alone
+is not authorization: OfficePulse's credential consumption remains the
+authorization; the scope only pins which business the credentials may resolve.
 
 ## Current implementation boundary
 
@@ -27,25 +51,46 @@ The unified platform plan assigns voice runtime ownership to OfficePulse;
 AidaControl remains a reserved future extraction. The older issue/spec references
 to a standalone AidaControl service and PostgreSQL are not deployment dependencies.
 
+Contract v2 (2026-09-17, AidaAgent #12) was implemented against the shared
+cross-repository contract document while OfficePulse #22 and AidaAdmin #42 were
+implemented in parallel. It is verified here by offline unit and loopback HTTP
+tests only; **no live LiveKit/SIP/PBX acceptance call was exercised** for v2.
+v1 dispatch (`{callSessionId, bootstrapToken}`) and v1 snapshots
+(`schemaVersion: 1`, no scope) are no longer accepted anywhere.
+
 ## Dispatch
 
 LiveKit job metadata is a strict JSON object with exactly:
 
 ```json
-{"callSessionId":"281c6b8e-6a61-45ba-9165-eb199825d12e","bootstrapToken":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+{
+  "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+  "bootstrapToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "pbxInstanceId": "officepulse-dev",
+  "context": "example-office"
+}
 ```
 
-`callSessionId` is an application-generated, canonical lowercase UUID string.
-The assigned room must be `aida-<callSessionId>`. No assumption is made about its
+| Field | Requirement |
+| --- | --- |
+| `callSessionId` | Required canonical lowercase UUID string; room must be `aida-<callSessionId>` |
+| `bootstrapToken` | Required opaque bearer credential, `^[A-Za-z0-9_-]{43,256}$` |
+| `pbxInstanceId` | Required, `^[A-Za-z0-9_.-]{1,80}$` |
+| `context` | Required extension context, `^[a-zA-Z0-9_.-]{1,40}$` |
+
+`callSessionId` is application-generated; no assumption is made about its
 storage type or UUID version. `bootstrapToken` is an opaque URL-safe bearer
-credential: 43–256 ASCII letters, digits, `_`, or `-`. The producer must generate
-at least 256 random bits. `routeToken` has the same wire grammar and is a
-separate, independently generated credential. Neither value is a JWT.
+credential. The producer must generate at least 256 random bits. `routeToken`
+has the same wire grammar and is a separate, independently generated credential.
+Neither value is a JWT. `pbxInstanceId` and `context` are the routing scope
+OfficePulse resolved at admission (DID → owned queue → owning context); the
+worker validates their grammar and carries them into lifecycle diagnostics.
 
 Dispatch is at most 16,384 UTF-8 bytes. Unknown fields (including `schemaVersion`,
-inline prompts, models, voices, URLs, tools, or credentials), duplicate keys,
-nulls, non-object JSON, and non-finite JSON numbers are rejected before connection.
-There is no automatic fallback to the old metadata format.
+`tenantId`, `iTenantId`, `didContext`, inline prompts, models, voices, URLs,
+tools, or credentials), missing scope fields, duplicate keys, nulls, non-object
+JSON, and non-finite JSON numbers are rejected before connection. There is no
+automatic fallback to the v1 or inline metadata formats.
 
 ## SIP leg and authorization request
 
@@ -88,7 +133,8 @@ Before returning the profile, OfficePulse must:
 
 1. Authenticate the bootstrap credential against its stored hash, expiry,
    unused state, call ID, room, and intended dispatch. Reject ended, failed,
-   disabled, or no-longer-authorized calls/tenants.
+   disabled, or no-longer-authorized calls/customers, and any call whose
+   pinned `{pbxInstanceId, context}` no longer matches the assignment.
 2. Verify the route credential's hash, expiry, unused state, call/room,
    OfficePulse instance, and PBX linked ID. The intended route-token lifetime
    is 120 seconds; the Agent's local deadline does not extend either expiry.
@@ -116,9 +162,11 @@ request/dispatch. `profileSnapshot` is a strict JSON object:
 
 | Field | Requirement |
 | --- | --- |
-| `schemaVersion` | Required integer `1`; never implicit |
+| `schemaVersion` | Required integer `2`; never implicit. `1` is rejected |
 | `callSessionId` | Required; same UUID as the dispatch and room |
-| `tenantId` | Positive canonical decimal string or safe integer |
+| `pbxInstanceId` | Required, `^[A-Za-z0-9_.-]{1,80}$`; must equal the dispatch value |
+| `context` | Required extension context, `^[a-zA-Z0-9_.-]{1,40}$`; must equal the dispatch value |
+| `tenantId` | Optional positive canonical decimal **string** (no leading zeros, at most 2^53−1); customer identity only |
 | `businessName` | Required nonblank string, up to 256 characters |
 | `prompt` | Required nonblank string, up to 12,000 characters |
 | `locale` | Required `en-US` for this English POC |
@@ -132,6 +180,22 @@ request/dispatch. `profileSnapshot` is a strict JSON object:
 Profile JSON is capped at 65,536 bytes on validation. Nulls, NUL-containing
 strings, duplicate keys, unsupported versions and extra fields are rejected.
 The full example response is in the shared fixture.
+
+**Scope mismatch rule.** After the binding fields above match, the worker
+requires `profileSnapshot.pbxInstanceId == dispatch.pbxInstanceId` and
+`profileSnapshot.context == dispatch.context` (exact, case-sensitive string
+comparison) and otherwise fails closed with `bootstrap scope mismatch`. A
+snapshot for the same context name on a different PBX instance, or for a
+different context on the same instance, is rejected; the consumed credentials
+are never replayed.
+
+**`tenantId` is non-routing.** When present it is validated and kept on the
+frozen call configuration as `tenant_id` for observation only; when absent
+`tenant_id` is `""`. It does not participate in scope matching, is not rendered
+into the model instructions, is not logged, and a snapshot without it bootstraps
+and completes a conversation normally. A present-but-non-canonical value (integer,
+leading zero, sign, blank, null, out of range) is rejected like any other invalid
+field.
 
 The worker freezes the validated profile for the job and renders it as one
 JSON-escaped business-context block under fixed screening instructions. Template
@@ -199,14 +263,16 @@ does not implement that telephony fallback.
 
 1. Implement native OfficePulse admission, the durable atomic credential store,
    the endpoint above, header mapping, participant verification, and fallback
-   watchdog. Test expiry/replay/concurrency and tenant/room/SIP mismatch there.
+   watchdog. Test expiry/replay/concurrency and scope/room/SIP mismatch there.
 2. Run the shared fixture against both implementations. Stage the pair with a
    distinct dispatch name (`aida-prime-bootstrap-dev` is the example default).
-   The current inline-metadata producer is incompatible with this consumer.
+   The inline-metadata and v1 producers are incompatible with this consumer.
 3. Validate real PBX/LiveKit calls: authorized ready once, English prompt and
    greeting, missing/wrong/reused tokens falling back locally, and concurrent
-   businesses remaining isolated. Verify transcript delivery, barge-in, human
-   takeover during startup/screening, and failed takeover.
+   businesses (distinct contexts, including a same-named context on another PBX
+   instance) remaining isolated. Verify transcript delivery, barge-in, human
+   takeover during startup/screening, and failed takeover. None of this has been
+   exercised live for v2.
 4. Enable producer and worker together after development acceptance. This Agent
    has never been live; no rollback preparation is required. Fix any failed
    checks in place and keep producer/worker contracts aligned under one agent name.

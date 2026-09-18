@@ -37,7 +37,12 @@ def authorized_profile(raw: bytes, dispatch: DispatchConfiguration,
             or data["sipParticipantIdentity"] != leg.identity
             or data["sipParticipantSid"] != leg.sid):
         raise InvalidConfiguration("bootstrap binding mismatch")
-    return CallConfiguration.parse(json.dumps(data["profileSnapshot"]), room_name)
+    call = CallConfiguration.parse(json.dumps(data["profileSnapshot"]), room_name)
+    # Routing scope is {pbxInstanceId, context}: the same context name on another PBX
+    # instance is a different scope, so both must equal the trusted dispatch exactly.
+    if call.pbx_instance_id != dispatch.pbx_instance_id or call.context != dispatch.context:
+        raise InvalidConfiguration("bootstrap scope mismatch")
+    return call
 
 
 class BootstrapClient:

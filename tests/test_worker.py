@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from aida_agent import worker
+from aida_agent.bootstrap import authorized_profile
 from aida_agent.config import DeploymentConfiguration
-from conftest import CALL_ID
+from conftest import CALL_ID, CONTEXT, PBX_INSTANCE_ID
 
 
 class EventSource:
@@ -96,7 +97,7 @@ def runtime(monkeypatch, dispatch, call):
     return ctx, session
 
 
-async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
+async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime, contract):
     ctx, session = runtime
     await worker.entrypoint(ctx)
     options = session.start.call_args.kwargs["room_options"]
@@ -106,8 +107,6 @@ async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
     ready = ctx.room.local_participant.publish_data.await_args_list[0]
     ctx.room.audio.set_subscribed.assert_called_once_with(True)
     assert ready.kwargs == {"topic": "aida.event.agent_ready", "reliable": True}
-    from pathlib import Path
-    contract = json.loads((Path(__file__).parent / "fixtures/bootstrap-v1.json").read_text())
     assert json.loads(ready.args[0]) == contract["ready"]
     assert options.text_input is False
     assert options.delete_room_on_close is False
@@ -134,14 +133,104 @@ async def test_worker_sdk_events_publish_handset_envelopes_and_cleanup(runtime):
     assert "data_received" not in ctx.room.handlers
 
 
-async def test_invalid_job_is_rejected_before_room_or_provider_access(runtime, caplog):
+@pytest.mark.parametrize("job_metadata", [
+    '{"apiKey":"secret-credential"}',
+    json.dumps({"callSessionId": CALL_ID, "bootstrapToken": "b" * 43}),
+    json.dumps({"callSessionId": CALL_ID, "bootstrapToken": "b" * 43,
+                "pbxInstanceId": PBX_INSTANCE_ID, "context": "from carrier"}),
+], ids=["unknown-field", "v1-dispatch-without-scope", "bad-context-grammar"])
+async def test_invalid_job_is_rejected_before_room_or_provider_access(runtime, caplog, job_metadata):
     ctx, session = runtime
-    ctx.job.metadata = '{"apiKey":"secret-credential"}'
+    ctx.job.metadata = job_metadata
     await worker.entrypoint(ctx)
     ctx.shutdown.assert_called_once_with(reason="invalid configuration")
     ctx.connect.assert_not_awaited()
     worker.create_session.assert_not_called()
     assert "secret-credential" not in caplog.text
+
+
+@pytest.fixture
+def fixture_authority(runtime, contract):
+    # Real authorized_profile over the shared v2 fixture, bound to whatever dispatch/leg the
+    # worker actually passes: exercises dispatch → bootstrap → scope check end to end.
+    ctx, _session = runtime
+    ctx.job.metadata = json.dumps(contract["dispatch"])
+
+    async def authorize(dispatch, room_name, leg):
+        return authorized_profile(json.dumps(contract["response"]).encode(), dispatch, room_name, leg)
+
+    worker.BootstrapClient.return_value.authorize.side_effect = authorize
+    return contract
+
+
+async def test_context_scoped_dispatch_completes_conversation_without_tenant(
+        runtime, fixture_authority, caplog):
+    import logging
+    ctx, session = runtime
+    caplog.set_level(logging.INFO, logger="aida_agent")
+    del fixture_authority["response"]["profileSnapshot"]["tenantId"]
+    await worker.entrypoint(ctx)
+    call = worker.create_session.call_args.args[1]
+    assert call.tenant_id == ""
+    assert (call.pbx_instance_id, call.context) == ("officepulse-dev", "example-office")
+    ctx.room.participant.publish_data.assert_awaited_once()
+    assert json.loads(ctx.room.participant.publish_data.await_args.args[0]) == fixture_authority["ready"]
+    assert session.input.set_audio_enabled.call_args.args == (True,)
+    assert session.output.set_audio_enabled.call_args.args == (True,)
+    session.say.assert_called_once_with("Thank you for calling.", allow_interruptions=True)
+    ctx.shutdown.assert_not_called()
+    enabled = next(r for r in caplog.records if getattr(r, "event", None) == "conversation-enabled")
+    assert (enabled.pbxInstanceId, enabled.context) == ("officepulse-dev", "example-office")
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+async def test_context_scoped_dispatch_with_tenant_completes_conversation(runtime, fixture_authority):
+    ctx, session = runtime
+    await worker.entrypoint(ctx)
+    assert worker.create_session.call_args.args[1].tenant_id == "42"
+    session.say.assert_called_once_with("Thank you for calling.", allow_interruptions=True)
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+@pytest.mark.parametrize("key,value", [
+    ("pbxInstanceId", "officepulse-prod"), ("context", "other-office"),
+], ids=["same-context-other-instance", "other-context"])
+async def test_scope_mismatch_between_dispatch_and_profile_fails_closed(
+        runtime, fixture_authority, caplog, key, value):
+    import logging
+    ctx, session = runtime
+    caplog.set_level(logging.INFO, logger="aida_agent")
+    dispatch = {**fixture_authority["dispatch"], key: value}
+    ctx.job.metadata = json.dumps(dispatch)
+    await worker.entrypoint(ctx)
+    worker.BootstrapClient.return_value.authorize.assert_awaited_once()
+    worker.create_session.assert_not_called()
+    ctx.room.participant.publish_data.assert_not_awaited()
+    session.say.assert_not_called()
+    ctx.shutdown.assert_called()
+    failed = next(r for r in caplog.records if getattr(r, "event", None) == "startup-failed")
+    assert (failed.stage, failed.errorType) == ("bootstrap", "InvalidConfiguration")
+    assert (failed.pbxInstanceId, failed.context) == (dispatch["pbxInstanceId"], dispatch["context"])
+
+
+async def test_scope_comes_from_dispatch_not_participant_attributes(runtime, fixture_authority,
+                                                                    caplog):
+    import logging
+    ctx, session = runtime
+    caplog.set_level(logging.INFO, logger="aida_agent")
+    ctx.room.sip.attributes.update({
+        "context": "impostor-context", "pbxInstanceId": "impostor-pbx",
+        "sip.phoneNumber": "+15550000000", "sip.trunkPhoneNumber": "+15551234567",
+    })
+    await worker.entrypoint(ctx)
+    session.say.assert_called_once()
+    records = [r for r in caplog.records if getattr(r, "event", None)]
+    assert records and all((r.pbxInstanceId, r.context) == (PBX_INSTANCE_ID, CONTEXT)
+                           for r in records)
+    text = str([r.__dict__ for r in caplog.records])
+    assert "impostor" not in text
+    assert "+1555" not in text
+    await ctx.add_shutdown_callback.call_args.args[0]()
 
 
 async def test_takeover_during_connect_prevents_session_and_greeting(runtime):
@@ -518,7 +607,10 @@ async def test_lifecycle_diagnostics_count_stt_without_call_content(runtime, cap
     closing = next(r for r in caplog.records if getattr(r, "event", None) == "closing")
     assert closing.sttFinalEvents == closing.assistantItems == 1
     assert closing.callSessionId == CALL_ID
+    assert (closing.pbxInstanceId, closing.context) == (PBX_INSTANCE_ID, CONTEXT)
     records = str([r.__dict__ for r in caplog.records])
+    assert "42" not in json.dumps([getattr(r, "tenantId", None) for r in caplog.records])
+    assert "Ask how we can help." not in records
     assert "private-caller-words" not in records
     assert "private-agent-words" not in records
     assert "private-provider-details" not in records
