@@ -10,9 +10,14 @@ from uuid import UUID
 MAX_METADATA_BYTES = 16_384
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PROFILE_BYTES = 65_536
-REQUIRED = {"callSessionId", "tenantId", "businessName", "prompt", "locale", "didE164"}
+# Bootstrap contract v2: routing scope is {pbxInstanceId, context}; tenantId is optional
+# customer identity for authorization/observation only and never selects anything here.
+REQUIRED = {
+    "schemaVersion", "callSessionId", "pbxInstanceId", "context", "businessName", "prompt",
+    "locale", "didE164",
+}
 OPTIONAL = {
-    "schemaVersion", "tone", "objective", "openingStatement", "transferStatement",
+    "tenantId", "tone", "objective", "openingStatement", "transferStatement",
     "failedTransferStatement",
 }
 
@@ -56,12 +61,24 @@ def canonical_uuid(value: object) -> str:
 
 
 def tenant_id(value: object) -> str:
-    if type(value) is int:
-        value = str(value)
+    # String on the wire (snapshot); never a routing key, so no integer coercion.
     if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,15}", value):
         raise InvalidConfiguration("positive canonical tenant ID required")
     if int(value) > MAX_SAFE_INTEGER:
         raise InvalidConfiguration("tenant ID outside supported range")
+    return value
+
+
+def pbx_instance_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
+        raise InvalidConfiguration("invalid PBX instance ID")
+    return value
+
+
+def extension_context(value: object) -> str:
+    # Asterisk dialplan context; the same name on another PBX instance is another scope.
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,40}", value):
+        raise InvalidConfiguration("invalid extension context")
     return value
 
 
@@ -76,16 +93,20 @@ def credential(value: object) -> str:
 class DispatchConfiguration:
     call_id: str
     bootstrap_token: str
+    pbx_instance_id: str
+    context: str
 
     @classmethod
     def parse(cls, raw: str, room_name: str) -> "DispatchConfiguration":
+        # The trusted dispatch is the only source of routing scope for a job.
         data = strict_json(raw, MAX_METADATA_BYTES)
-        if set(data) != {"callSessionId", "bootstrapToken"}:
+        if set(data) != {"callSessionId", "bootstrapToken", "pbxInstanceId", "context"}:
             raise InvalidConfiguration("invalid dispatch fields")
         call_id = canonical_uuid(data["callSessionId"])
         if room_name != f"aida-{call_id}":
             raise InvalidConfiguration("dispatch room does not match call")
-        return cls(call_id, credential(data["bootstrapToken"]))
+        return cls(call_id, credential(data["bootstrapToken"]),
+                   pbx_instance_id(data["pbxInstanceId"]), extension_context(data["context"]))
 
 
 @dataclass(frozen=True)
@@ -121,26 +142,28 @@ class BootstrapConfiguration:
 @dataclass(frozen=True, repr=False)
 class CallConfiguration:
     call_id: str
-    tenant_id: str
+    pbx_instance_id: str
+    context: str
     business_name: str
     prompt: str
     locale: str
     did_e164: str
+    tenant_id: str = ""  # Non-routing customer identity; "" when the snapshot omits it.
     tone: str = ""
     objective: str = ""
     opening_statement: str = ""
     transfer_statement: str = ""
     failed_transfer_statement: str = ""
-    schema_version: int = 1
+    schema_version: int = 2
 
     @classmethod
     def parse(cls, raw: str, room_name: str) -> "CallConfiguration":
         """Parse only the profileSnapshot returned by the authorized endpoint."""
         data = strict_json(raw, MAX_PROFILE_BYTES)
-        if not (REQUIRED | {"schemaVersion"}) <= data.keys() or data.keys() - REQUIRED - OPTIONAL:
-            raise InvalidConfiguration("profile fields do not match v1 allowlist")
+        if not REQUIRED <= data.keys() or data.keys() - REQUIRED - OPTIONAL:
+            raise InvalidConfiguration("profile fields do not match v2 allowlist")
         version = data["schemaVersion"]
-        if type(version) is not int or version != 1:
+        if type(version) is not int or version != 2:
             raise InvalidConfiguration("unsupported profile schema version")
         call_id = canonical_uuid(data["callSessionId"])
         if room_name != f"aida-{call_id}":
@@ -161,7 +184,9 @@ class CallConfiguration:
         if not re.fullmatch(r"\+[1-9][0-9]{1,14}", did):
             raise InvalidConfiguration("invalid E.164 number")
         return cls(
-            call_id=call_id, tenant_id=tenant_id(data["tenantId"]),
+            call_id=call_id, pbx_instance_id=pbx_instance_id(data["pbxInstanceId"]),
+            context=extension_context(data["context"]),
+            tenant_id=tenant_id(data["tenantId"]) if "tenantId" in data else "",
             business_name=string("businessName", 256, True),
             prompt=string("prompt", 12_000, True), locale=locale, did_e164=did,
             tone=string("tone", 256), objective=string("objective"),

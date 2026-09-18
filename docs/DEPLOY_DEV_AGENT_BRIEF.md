@@ -1,5 +1,9 @@
 # Optimus task: deploy AidaAgent on the development server
 
+> Note: this brief predates the context migration (AidaAgent #12). Its verified
+> facts are from 2026-09-11; the bootstrap contract is now v2 with dispatch scope
+> `{pbxInstanceId, context}` (see [BOOTSTRAP_CONTRACT.md](BOOTSTRAP_CONTRACT.md)).
+
 Deploy the GitHub `dev` revision of `localsplash/AidaAgent` on
 `dockerappvm01.localsplash.dev`. Generate the required environment configuration
 using approved secret/configuration sources. Preserve the canonical single Agent
@@ -122,11 +126,14 @@ this code dependency. Leave the updated Agent in preview while it is absent.
 Before enabling voice, verify all of the following:
 
 - OfficePulse implements native call admission and dispatches exactly
-  `{callSessionId, bootstrapToken}` to the matching Agent name and LiveKit project.
+  `{callSessionId, bootstrapToken, pbxInstanceId, context}` to the matching Agent
+  name and LiveKit project (v1 `{callSessionId, bootstrapToken}` is rejected).
 - `POST /v1/agent/calls/{callSessionId}/bootstrap` authenticates the call-scoped
   bearer, independently validates the observed SIP leg, atomically consumes both
-  credentials, and returns the immutable, versioned profile. Replay, expiry,
-  tenant/call/room/SID mismatches and concurrent consumption are tested server-side.
+  credentials, and returns the immutable `schemaVersion` 2 profile carrying the
+  same `pbxInstanceId`/`context`. Replay, expiry, scope/call/room/SID mismatches
+  and concurrent consumption are tested server-side; the Agent additionally fails
+  closed on `bootstrap scope mismatch`.
 - OfficePulse injects the SIP route header, and LiveKit exposes the agreed
   participant attribute. The SIP leg must be routed before waiting for the
   conversation-ready event, otherwise startup deadlocks.

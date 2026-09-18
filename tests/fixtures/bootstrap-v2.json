@@ -1,7 +1,9 @@
 {
   "dispatch": {
     "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
-    "bootstrapToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    "bootstrapToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "pbxInstanceId": "officepulse-dev",
+    "context": "example-office"
   },
   "request": {
     "roomName": "aida-281c6b8e-6a61-45ba-9165-eb199825d12e",
@@ -15,8 +17,10 @@
     "sipParticipantIdentity": "sip-caller",
     "sipParticipantSid": "PA_sip",
     "profileSnapshot": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "callSessionId": "281c6b8e-6a61-45ba-9165-eb199825d12e",
+      "pbxInstanceId": "officepulse-dev",
+      "context": "example-office",
       "tenantId": "42",
       "businessName": "Example Office",
       "prompt": "Ask how we can help.",

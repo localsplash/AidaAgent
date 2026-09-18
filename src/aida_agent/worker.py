@@ -66,8 +66,11 @@ async def entrypoint(ctx: JobContext):
 
     def observe(event, **fields):
         # Only explicit lifecycle fields/counts; never provider errors or call content.
+        # Scope comes from the trusted dispatch, never from caller ID or participant
+        # attributes, and the authorized profile must match it (bootstrap.py).
         logger.info("agent lifecycle", extra={
-            "callSessionId": dispatch.call_id, "event": event, **fields,
+            "callSessionId": dispatch.call_id, "pbxInstanceId": dispatch.pbx_instance_id,
+            "context": dispatch.context, "event": event, **fields,
         })
     control = ControlHandler(
         dispatch.call_id, None, ctx.room.disconnect,

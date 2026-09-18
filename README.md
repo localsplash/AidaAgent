@@ -13,17 +13,20 @@ bootstrap endpoint and a real LiveKit/PBX acceptance call remain release prerequ
 ## Ownership
 
 - **Identity** owns users, organizations, memberships, and sign-in sessions.
-- **OfficePulse** checks tenant access, resolves business settings, owns calls and
+- **OfficePulse** checks customer (tenant) access, resolves the call's PBX routing
+  scope `{pbxInstanceId, context}` from Asterisk's own records, owns calls and
   device access, creates LiveKit rooms/tokens, and performs PBX takeover.
 - **AidaAgent** receives an authorized per-call configuration. It has no database,
   Identity credentials, carrier API, room deletion, or participant-removal API.
 - **AidaHandset** displays live transcripts using a tenant-authorized room token
   from OfficePulse.
 
-The worker receives only a call ID and one-time bootstrap credential in dispatch.
-OfficePulse must authorize and atomically consume bootstrap and SIP route credentials
-before returning the immutable business profile. Keep dispatch
-and room-admin credentials on servers. Each business call has separate state.
+The worker receives only a call ID, a one-time bootstrap credential, and the PBX
+instance/extension-context scope in dispatch. OfficePulse must authorize and
+atomically consume bootstrap and SIP route credentials before returning the
+immutable business profile, which must carry the same scope. Tenant identity is
+never a routing key here. Keep dispatch and room-admin credentials on servers.
+Each business call has separate state.
 
 ## Run
 
@@ -77,17 +80,24 @@ inference providers necessarily process the supplied audio and text.
 
 ## Dispatch and authorized profile
 
-Job dispatch metadata contains exactly `callSessionId` and `bootstrapToken`.
-Inline business context and unknown fields are rejected before connection.
+Job dispatch metadata contains exactly `callSessionId`, `bootstrapToken`,
+`pbxInstanceId`, and `context` (contract v2). Inline business context, tenant
+IDs, unknown fields, and the retired v1 shape are rejected before connection.
 The worker joins the matching `aida-<callSessionId>` room without subscriptions,
 waits for the inbound SIP participant and configured route-token attribute,
 and authorizes both credentials with OfficePulse. Only the returned immutable
-`profileSnapshot` can supply business context.
+`profileSnapshot` (`schemaVersion` 2) can supply business context, and its
+`pbxInstanceId`/`context` must equal the dispatch scope or the job fails closed
+(`bootstrap scope mismatch`). The same context name on a different PBX instance
+is a different scope. The snapshot's optional `tenantId` is customer identity for
+observation only; it is not required and never selects routing, providers, or
+prompts. Scope is never inferred from caller ID or participant attributes.
 
-See [Bootstrap contract v1](docs/BOOTSTRAP_CONTRACT.md) for the exact endpoint,
+See [Bootstrap contract v2](docs/BOOTSTRAP_CONTRACT.md) for the exact endpoint,
 request/response and readiness schemas, limits, fail-closed behavior, upstream
 implementation requirements, and coordinated rollout. The shared
-[contract fixture](tests/fixtures/bootstrap-v1.json) is exercised by offline HTTP tests.
+[contract fixture](tests/fixtures/bootstrap-v2.json) is exercised by offline HTTP
+tests; live LiveKit/SIP acceptance of v2 has not been exercised.
 
 Set `AIDA_BOOTSTRAP_URL` to the authority's HTTPS origin and
 `AIDA_ROUTE_TOKEN_ATTRIBUTE` to the trunk's mapping for `X-Aida-Route-Token`.
@@ -101,9 +111,10 @@ Room text input and SDK remote session hosting are disabled. SIP replacement,
 timeout, credential rejection, or readiness failure terminates the agent job.
 OfficePulse owns the corresponding PBX fallback watchdog.
 
-INFO lifecycle diagnostics include the call session ID, startup stages, final STT
-event counts, assistant item counts, and whether a provider error is recoverable.
-They never include speech text, profile content, credentials, or exception messages.
+INFO lifecycle diagnostics include the call session ID, the dispatched
+`pbxInstanceId` and `context`, startup stages, final STT event counts, assistant
+item counts, and whether a provider error is recoverable. They never include
+speech text, profile content, tenant IDs, credentials, or exception messages.
 
 Provider and voice selections remain deployment settings. Profile strings use
 literal JSON escaping under fixed English screening instructions; no template
