@@ -181,18 +181,28 @@ def test_templates_are_literal_and_profile_cannot_introduce_fields(metadata):
 
 @pytest.fixture
 def settings():
-    return {"AIDA_BOOTSTRAP_URL": "https://officepulse.example",
+    return {"AIDA_BOOTSTRAP_URL": "https://officepulse.test",
             "AIDA_ROUTE_TOKEN_ATTRIBUTE": "sip.aidaRouteToken"}
 
 
 @pytest.mark.parametrize("url", ["", "http://officepulse.example", "https://u:p@host",
                                   "https://host?token=x", "https://host#x", "https://host/path",
                                   "https://host?", "https://host#", "https://@host",
-                                  "https://host:bad", "https://host:0", "https://host\n"])
+                                  "https://host:bad", "https://host:0", "https://host\n",
+                                  # Unedited templates and other RFC 2606 documentation hosts.
+                                  "https://officepulse.example.com", "https://example.org",
+                                  "https://EXAMPLE.NET.", "https://officepulse.example"])
 def test_only_deployment_https_origin(settings, url):
     settings["AIDA_BOOTSTRAP_URL"] = url
     with pytest.raises(InvalidConfiguration):
         BootstrapConfiguration.from_env(settings)
+
+
+@pytest.mark.parametrize("url", ["https://officepulse-api.localsplash.dev", "https://notexample.com",
+                                  "https://example.com.localsplash.dev", "https://officepulse.test:8443"])
+def test_real_origins_are_not_placeholders(settings, url):
+    settings["AIDA_BOOTSTRAP_URL"] = url
+    assert BootstrapConfiguration.from_env(settings).base_url == url
 
 
 @pytest.mark.parametrize("timeout", ["0", "61", "nan", "inf", "-1", "x"])

@@ -45,6 +45,16 @@ This is an **outbound worker**: NPM needs no `*.localsplash.dev` hostname for it
 Ports 8081 (SDK health) and 8082 (application diagnostics) are exposed only on its
 Docker network. Process health alone does not validate SIP audio or inference.
 
+The container is named `aidaagent-aida-agent`. Only one worker may register a
+given `AIDA_AGENT_NAME` in the LiveKit project: stop any other deployment using
+that name first, or LiveKit splits calls between them. The worker exits at
+startup while `AIDA_BOOTSTRAP_URL` is unset or an `example.*` placeholder.
+
+Where a reverse proxy serves `/healthz` by container name (dev: NPM on
+`npm_network`), set `COMPOSE_FILE=compose.yaml:compose.proxy.yaml` (and
+optionally `AIDA_PROXY_NETWORK`) in `.env` so recreating the container keeps
+that network attachment.
+
 `AIDA_AGENT_NAME` defaults to `aida-prime` and must match OfficePulse's
 `LIVEKIT_AGENT_NAME`. Alongside a pre-existing cloud agent, use `aida-prime-dev`
 in both deployments. The example uses `aida-prime-bootstrap-dev` for the new
