@@ -1,5 +1,7 @@
 services:
   aida-agent:
+    # Stable name for the reverse proxy upstream; Compose would otherwise append '-1'.
+    container_name: aidaagent-aida-agent
     build:
       context: .
       target: runtime
