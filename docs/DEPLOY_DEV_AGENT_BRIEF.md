@@ -3,6 +3,12 @@
 > Note: this brief predates the context migration (AidaAgent #12). Its verified
 > facts are from 2026-09-11; the bootstrap contract is now v2 with dispatch scope
 > `{pbxInstanceId, context}` (see [BOOTSTRAP_CONTRACT.md](BOOTSTRAP_CONTRACT.md)).
+>
+> Superseded 2026-09-18: the `/opt/platform-local/agent` project and its
+> `aida-agent-local` container were removed. The dev host now runs this
+> repository's Compose project from `/opt/aida/AidaAgent` (container
+> `aidaagent-aida-agent`, with `compose.proxy.yaml` for `npm_network`); see the
+> README "Run" section.
 
 Deploy the GitHub `dev` revision of `localsplash/AidaAgent` on
 `dockerappvm01.localsplash.dev`. Generate the required environment configuration

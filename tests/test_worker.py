@@ -90,7 +90,7 @@ def runtime(monkeypatch, dispatch, call):
     monkeypatch.setattr(worker, "create_session", Mock(return_value=session))
     monkeypatch.setattr(worker, "BootstrapClient", Mock(return_value=SimpleNamespace(
         authorize=AsyncMock(return_value=call))))
-    monkeypatch.setenv("AIDA_BOOTSTRAP_URL", "https://officepulse.example")
+    monkeypatch.setenv("AIDA_BOOTSTRAP_URL", "https://officepulse.test")
     monkeypatch.setenv("AIDA_ROUTE_TOKEN_ATTRIBUTE", "sip.aidaRouteToken")
     for key in ("AIDA_STT_MODEL", "AIDA_LLM_MODEL", "AIDA_TTS_MODEL", "AIDA_TTS_VOICE"):
         monkeypatch.setenv(key, "fake/model")

@@ -127,6 +127,10 @@ class BootstrapConfiguration:
             valid = False
         if not valid or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in base):
             raise InvalidConfiguration("AIDA_BOOTSTRAP_URL must be an HTTPS origin")
+        # RFC 2606 documentation names never serve a bootstrap API: an unedited
+        # template must stop the worker at startup, not fail every call later.
+        if re.search(r"(^|\.)example(\.(com|net|org))?$", url.hostname.lower().rstrip(".")):
+            raise InvalidConfiguration("AIDA_BOOTSTRAP_URL is a placeholder")
         attribute = env.get("AIDA_ROUTE_TOKEN_ATTRIBUTE", "")
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", attribute):
             raise InvalidConfiguration("AIDA_ROUTE_TOKEN_ATTRIBUTE is required")
