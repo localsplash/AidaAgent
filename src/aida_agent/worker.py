@@ -103,7 +103,7 @@ async def entrypoint(ctx: JobContext):
     def on_data(packet):
         if not aborted:
             control.receive(packet)
-            if control.stopping:
+            if control.stopping and not control.ready:
                 abort()
 
     async def cleanup():
@@ -148,6 +148,7 @@ async def entrypoint(ctx: JobContext):
             session.input.set_audio_enabled(False)
             session.output.set_audio_enabled(False)
             control.session = session
+            control.transfer_statement = call.transfer_statement
             control.failed_statement = call.failed_transfer_statement
             stream = TranscriptStream(call.call_id)
             publisher = TranscriptPublisher(ctx.room.local_participant, abort)
@@ -210,7 +211,8 @@ async def entrypoint(ctx: JobContext):
                 return
             # No await between the final checks and enabling normal turns.
             publisher.start()
-            control.ready = True
+            if not control.activate():
+                return
             session.output.set_audio_enabled(True)
             session.input.set_audio_enabled(True)
             observe("conversation-enabled")
@@ -234,7 +236,7 @@ async def entrypoint(ctx: JobContext):
         observe("startup-failed", stage=stage, errorType=type(error).__name__)
         abort()
     finally:
-        if aborted or control.stopping:
+        if aborted or (control.stopping and not control.ready):
             await cleanup()
             try:
                 await asyncio.wait_for(ctx.room.disconnect(), timeout=2)

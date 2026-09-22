@@ -431,6 +431,72 @@ async def test_transfer_failure_during_startup_cannot_enable_audio(runtime):
     await ctx.add_shutdown_callback.call_args.args[0]()
 
 
+async def test_transfer_requested_during_startup_plays_profile_outro_instead_of_greeting(runtime):
+    import asyncio
+    from dataclasses import replace
+    from test_control import packet
+    ctx, session = runtime
+    call = replace(worker.BootstrapClient.return_value.authorize.return_value,
+                   transfer_statement="I will connect you now.")
+    worker.BootstrapClient.return_value.authorize.return_value = call
+    session.interrupt.return_value = asyncio.get_running_loop().create_future()
+    session.interrupt.return_value.set_result(None)
+    session.say.return_value = Mock(wait_for_playout=AsyncMock())
+
+    async def start(**kwargs):
+        ctx.room.handlers["data_received"](
+            packet("transfer_requested", deadlineMs=9_000_000_000_000))
+        session.say.assert_not_called()
+        assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
+
+    session.start.side_effect = start
+    await worker.entrypoint(ctx)
+    for _ in range(10):
+        await asyncio.sleep(0)
+    session.say.assert_called_once_with(call.transfer_statement, allow_interruptions=False)
+    session.generate_reply.assert_not_called()
+    assert all(call.args == (False,) for call in session.input.set_audio_enabled.call_args_list)
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
+async def test_ready_worker_keeps_outro_audible_after_handset_answers(runtime):
+    import asyncio
+    from dataclasses import replace
+    from test_control import packet
+    ctx, session = runtime
+    worker.BootstrapClient.return_value.authorize.return_value = replace(
+        worker.BootstrapClient.return_value.authorize.return_value,
+        transfer_statement="Connecting you now.")
+    await worker.entrypoint(ctx)
+    interrupted = asyncio.get_running_loop().create_future()
+    interrupted.set_result(None)
+    session.interrupt.return_value = interrupted
+    started, finished = asyncio.Event(), asyncio.Event()
+
+    async def playout():
+        started.set()
+        await finished.wait()
+
+    session.say.return_value = Mock(wait_for_playout=AsyncMock(side_effect=playout))
+    ctx.room.handlers['data_received'](
+        packet('transfer_requested', deadlineMs=9_000_000_000_000))
+    await started.wait()
+    ctx.room.handlers['data_received'](
+        packet('human_answered', commandId='answer:2', deadlineMs=9_000_000_000_000))
+    await asyncio.sleep(0)
+    assert session.output.set_audio_enabled.call_args.args == (True,)
+    ctx.shutdown.assert_not_called()
+    ctx.room.disconnect.assert_not_awaited()
+    finished.set()
+    for _ in range(30):
+        if ctx.shutdown.called:
+            break
+        await asyncio.sleep(0)
+    ctx.room.disconnect.assert_awaited_once()
+    ctx.shutdown.assert_called()
+    await ctx.add_shutdown_callback.call_args.args[0]()
+
+
 async def test_sip_replacement_after_ready_silences_session(runtime):
     ctx, session = runtime
     await worker.entrypoint(ctx)

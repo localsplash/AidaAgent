@@ -178,17 +178,34 @@ OfficePulse sends **`aida.control`** using server `RoomService.SendData`:
 ```
 
 Only packets with SDK `participant is None` are accepted. A participant named
-`officepulse-integration` is still rejected. Only `human_answered` and
-`transfer_failed` are valid; call ID must match. Command IDs use a bounded
+`officepulse-integration` is still rejected. Only `transfer_requested`,
+`human_answered` and `transfer_failed` are valid; call ID must match. Command IDs use a bounded
 256-entry deduplication cache. Deadlines are absolute Unix milliseconds.
 
-`human_answered` immediately mutes input/output, interrupts queued speech, stops
-new turns, and disconnects **only the agent participant**. It waits no more than
-the remaining deadline, capped at 10 seconds, before requesting job shutdown.
-An expired success command still silences immediately. `transfer_failed` keeps
+`transfer_requested` disables caller input, interrupts the current response,
+then speaks the profile's `transferStatement` once, without interruption. It
+waits for actual playout within the supplied deadline (capped at 10 seconds),
+then mutes output while the handset rings. OfficePulse dials immediately alongside
+control delivery. Only MOH waits for the three-second announcement window;
+longer statements require a larger `TAKEOVER_ANNOUNCEMENT_TIMEOUT_MS` on the integration. A request received
+during startup is held until authorization/readiness, suppressing the normal
+greeting without extending the original deadline. Expired requests do not speak.
+
+`human_answered` stops new turns while keeping the current outro audible to the
+caller and the newly bridged handset. It waits for actual playout, extending
+the running announcement to the supplied post-answer grace deadline, capped at
+10 seconds (`TAKEOVER_DRAIN_TIMEOUT_MS` defaults to three seconds on OfficePulse).
+It then silences and disconnects **only the agent participant**. If the statement
+already finished it is not replayed; if the request was missed, success starts
+the statement within the grace period. An expired success command or success
+during unauthorized startup still silences immediately. `transfer_failed` keeps
 screening active and speaks the configured failure statement once; expired
 commands do not speak. Failure cannot restart an agent after human takeover.
 OfficePulse must publish `human_answered` only after the human bridge succeeds.
+Failure cancels any pending outro. OfficePulse owns SIP-leg hangup and
+explicit room deletion after successful drain, preserving the caller–handset
+bridge. The agent never deletes the room. Deploy the graceful success handler
+before the integration's simultaneous announcement/dialing change.
 
 ## Validation
 
