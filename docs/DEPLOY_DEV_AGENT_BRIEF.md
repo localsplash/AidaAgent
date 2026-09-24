@@ -6,9 +6,15 @@
 >
 > Superseded 2026-09-18: the `/opt/platform-local/agent` project and its
 > `aida-agent-local` container were removed. The dev host now runs this
-> repository's Compose project from `/opt/aida/AidaAgent` (container
-> `aidaagent-aida-agent`, with `compose.proxy.yaml` for `npm_network`); see the
+> repository's Compose project from `/opt/local/aida/AidaAgent` (container
+> `aidaagent-aida-agent`, on `npm_network` through `compose.yaml`); see the
 > README "Run" section.
+>
+> Superseded 2026-09-24: the settings listed below are no longer environment
+> variables. They are PlatformConfig rows (`aida/` and `aida-agent/` scopes,
+> README "Settings"), and `.env` holds only `NOCODB_BASE_URL` and
+> `NOCODB_API_TOKEN`; `AidaPlatformDB/install.sh apps` writes both and seeds
+> the rows. The brief is kept for the history of the POC decisions.
 
 Deploy the GitHub `dev` revision of `localsplash/AidaAgent` on
 `dockerappvm01.localsplash.dev`. Generate the required environment configuration
