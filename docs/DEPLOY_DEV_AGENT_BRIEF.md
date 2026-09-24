@@ -45,7 +45,7 @@ changes GitHub only; rebuilding and recreating the container installs the change
 LiveKit SDK, register for jobs, or call model providers. `/healthz` is 200 and
 `/readyz` is intentionally 503, even if every environment setting is present.
 
-`start` runs the LiveKit worker, registering outbound under `AIDA_AGENT_NAME`.
+`start` runs the LiveKit worker, registering outbound under `LIVEKIT_AGENT_NAME`.
 LiveKit assigns a job; the worker validates dispatch, joins its room, observes
 the SIP leg, authorizes bootstrap/route credentials over HTTPS, starts the muted
 voice session, publishes readiness, then enables conversation. STT/LLM/TTS use
@@ -80,12 +80,12 @@ fallback. The worker neither reads a database/NocoDB nor controls other call leg
    LIVEKIT_URL=wss://officepulse-localsplash-dev-wx1v0ch5.livekit.cloud
    LIVEKIT_API_KEY=<development-key>
    LIVEKIT_API_SECRET=<development-secret>
-   AIDA_AGENT_NAME=aida-prime-bootstrap-dev
+   LIVEKIT_AGENT_NAME=aida-prime-bootstrap-dev
    AIDA_STT_MODEL=deepgram/nova-3-general
    AIDA_LLM_MODEL=google/gemma-4-31b-it
    AIDA_TTS_MODEL=deepgram/aura-2
    AIDA_TTS_VOICE=asteria
-   AIDA_BOOTSTRAP_URL=https://<OfficePulse-bootstrap-origin>
+   OFFICEPULSE_API_BASE_URL=https://<OfficePulse-bootstrap-origin>
    AIDA_ROUTE_TOKEN_ATTRIBUTE=sip.aidaRouteToken
    AIDA_BOOTSTRAP_TIMEOUT_SECONDS=30
    ```
@@ -222,7 +222,7 @@ LIVEKIT_TRUNK_ENDPOINT=<actual-Asterisk-PJSIP-endpoint-name>
 is a PBX configuration identifier, not that SIP hostname or the LiveKit project
 ID (`p_c01ntkak7mh`). This runtime has no `LIVEKIT_PROJECT_ID` requirement.
 Both services must authenticate to the same development LiveKit project.
-`LIVEKIT_AGENT_NAME` in OfficePulse must equal `AIDA_AGENT_NAME` in the Agent.
+`LIVEKIT_AGENT_NAME` in OfficePulse must equal `LIVEKIT_AGENT_NAME` in the Agent.
 Keep `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL` and `AIDA_TTS_VOICE` on
 the Agent; OfficePulse does not load those variables or send provider overrides.
 
@@ -250,7 +250,7 @@ starts voice connectors but does not implement the missing native admission path
 Recreate the relevant container after changing environment/startup settings;
 creating a host `.env` alone is insufficient unless Compose injects it.
 
-The Agent's `AIDA_BOOTSTRAP_URL` must point to the HTTPS origin exposing the new
+The Agent's `OFFICEPULSE_API_BASE_URL` must point to the HTTPS origin exposing the new
 call-credential-authenticated OfficePulse endpoint. This is an Agent-side variable;
 OfficePulse has no matching magic environment switch that creates the endpoint.
 Configure its public route and reverse proxy when implementing the endpoint.
