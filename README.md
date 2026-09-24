@@ -50,10 +50,9 @@ given `LIVEKIT_AGENT_NAME` in the LiveKit project: stop any other deployment usi
 that name first, or LiveKit splits calls between them. The worker exits at
 startup while `OFFICEPULSE_API_BASE_URL` is unset or an `example.*` placeholder.
 
-Where a reverse proxy serves `/healthz` by container name (dev: NPM on
-`npm_network`), set `COMPOSE_FILE=compose.yaml:compose.proxy.yaml` (and
-optionally `AIDA_PROXY_NETWORK`) in `.env` so recreating the container keeps
-that network attachment.
+The worker also joins the reverse proxy's Docker network (`AIDA_PROXY_NETWORK`,
+default `npm_network`, which must exist) so the proxy can serve `/healthz` by
+container name.
 
 `LIVEKIT_AGENT_NAME` defaults to `aida-prime` and is the same `aida/LIVEKIT_AGENT_NAME`
 row OfficePulse dispatches to, so the two cannot drift. Alongside a pre-existing
