@@ -245,9 +245,9 @@ async def entrypoint(ctx: JobContext):
 
 
 def make_server() -> AgentServer:
-    agent_name = os.environ.get("AIDA_AGENT_NAME", "aida-prime")
+    agent_name = os.environ.get("LIVEKIT_AGENT_NAME", "aida-prime")
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", agent_name):
-        raise InvalidConfiguration("invalid AIDA_AGENT_NAME")
+        raise InvalidConfiguration("invalid LIVEKIT_AGENT_NAME")
     try:
         status_port = int(os.environ.get("AIDA_STATUS_PORT", "8082"))
         if not 1 <= status_port <= 65535 or status_port == 8081:
@@ -270,6 +270,10 @@ def main():
             BootstrapConfiguration.from_env(os.environ)
         except InvalidConfiguration as error:
             raise SystemExit(str(error)) from None
+        # The SDK reads these itself; say which row is missing rather than failing later.
+        for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+            if not os.environ.get(key, "").strip():
+                raise SystemExit(f"deployment setting {key} is required (PlatformConfig app=aida)")
     cli.run_app(make_server())
 
 

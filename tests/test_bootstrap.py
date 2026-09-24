@@ -181,7 +181,7 @@ def test_templates_are_literal_and_profile_cannot_introduce_fields(metadata):
 
 @pytest.fixture
 def settings():
-    return {"AIDA_BOOTSTRAP_URL": "https://officepulse.test",
+    return {"OFFICEPULSE_API_BASE_URL": "https://officepulse.test",
             "AIDA_ROUTE_TOKEN_ATTRIBUTE": "sip.aidaRouteToken"}
 
 
@@ -193,7 +193,7 @@ def settings():
                                   "https://officepulse.example.com", "https://example.org",
                                   "https://EXAMPLE.NET.", "https://officepulse.example"])
 def test_only_deployment_https_origin(settings, url):
-    settings["AIDA_BOOTSTRAP_URL"] = url
+    settings["OFFICEPULSE_API_BASE_URL"] = url
     with pytest.raises(InvalidConfiguration):
         BootstrapConfiguration.from_env(settings)
 
@@ -201,7 +201,7 @@ def test_only_deployment_https_origin(settings, url):
 @pytest.mark.parametrize("url", ["https://officepulse-api.localsplash.dev", "https://notexample.com",
                                   "https://example.com.localsplash.dev", "https://officepulse.test:8443"])
 def test_real_origins_are_not_placeholders(settings, url):
-    settings["AIDA_BOOTSTRAP_URL"] = url
+    settings["OFFICEPULSE_API_BASE_URL"] = url
     assert BootstrapConfiguration.from_env(settings).base_url == url
 
 

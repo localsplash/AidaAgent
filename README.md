@@ -35,7 +35,7 @@ OfficePulse/PBX SIP path into that project's rooms.
 
 ```sh
 cp .env.example .env
-# Set LiveKit credentials, bootstrap URL/attribute, and model/voice choices in .env.
+# Set NOCODB_BASE_URL and NOCODB_API_TOKEN; every other setting is a PlatformConfig row.
 scripts/with-build-info.sh docker compose build
 scripts/with-build-info.sh docker compose up -d
 docker compose ps
@@ -46,24 +46,23 @@ Ports 8081 (SDK health) and 8082 (application diagnostics) are exposed only on i
 Docker network. Process health alone does not validate SIP audio or inference.
 
 The container is named `aidaagent-aida-agent`. Only one worker may register a
-given `AIDA_AGENT_NAME` in the LiveKit project: stop any other deployment using
+given `LIVEKIT_AGENT_NAME` in the LiveKit project: stop any other deployment using
 that name first, or LiveKit splits calls between them. The worker exits at
-startup while `AIDA_BOOTSTRAP_URL` is unset or an `example.*` placeholder.
+startup while `OFFICEPULSE_API_BASE_URL` is unset or an `example.*` placeholder.
 
 Where a reverse proxy serves `/healthz` by container name (dev: NPM on
 `npm_network`), set `COMPOSE_FILE=compose.yaml:compose.proxy.yaml` (and
 optionally `AIDA_PROXY_NETWORK`) in `.env` so recreating the container keeps
 that network attachment.
 
-`AIDA_AGENT_NAME` defaults to `aida-prime` and must match OfficePulse's
-`LIVEKIT_AGENT_NAME`. Alongside a pre-existing cloud agent, use `aida-prime-dev`
-in both deployments. The example uses `aida-prime-bootstrap-dev` for the new
-contract. Retire the previous worker before reusing its name:
+`LIVEKIT_AGENT_NAME` defaults to `aida-prime` and is the same `aida/LIVEKIT_AGENT_NAME`
+row OfficePulse dispatches to, so the two cannot drift. Alongside a pre-existing
+cloud agent, use `aida-prime-dev`. Retire the previous worker before reusing its name:
 identical names may receive jobs across either implementation. The historical
 Cloud deployment ID `CA_Lbh5CTq2Rxhd` is not a runtime configuration source.
 
 Models and voice are explicit deployment settings: `AIDA_LLM_MODEL`,
-`AIDA_STT_MODEL`, `AIDA_TTS_MODEL`, and `AIDA_TTS_VOICE`. `.env.example` uses
+`AIDA_STT_MODEL`, `AIDA_TTS_MODEL`, and `AIDA_TTS_VOICE`. The dev rows use
 LiveKit Inference with LiveKit credentials; no separate provider key is needed.
 A self-hosted LiveKit server alone does not include hosted inference. Where
 needed, LiveKit supports separate `LIVEKIT_INFERENCE_API_KEY` and
@@ -78,9 +77,27 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[test]'
 aida-agent --help
-# Export .env values through your process manager/shell before starting.
+# Export NOCODB_BASE_URL and NOCODB_API_TOKEN; settings are read at start.
 aida-agent start
 ```
+
+### Settings
+
+The only bootstrap a deployment states is how to reach the settings store:
+`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` (a token of this worker's own). At
+`start`, `dev` and `preview` the worker reads `cfg_tbl_Setting` in the
+`PlatformConfig` base, resolved `app=*` < `app=aida` < `app=aida-agent`, and
+puts the values in its environment (the LiveKit SDK reads `LIVEKIT_*` there). A
+same-named variable in `.env` is ignored. Blank rows are unset; duplicate scoped
+keys and an unreachable store stop the worker rather than falling back.
+
+| Scope | Keys |
+| --- | --- |
+| `aida` | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `OFFICEPULSE_API_BASE_URL`, `AIDA_ROUTE_TOKEN_ATTRIBUTE` — shared with OfficePulse and AidaAdmin |
+| `aida-agent` | `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL`, `AIDA_TTS_VOICE`, optionally `AIDA_BOOTSTRAP_TIMEOUT_SECONDS` |
+
+`AIDA_STATUS_HOST`/`AIDA_STATUS_PORT` and `TZ` are process knobs, not settings,
+and keep their code defaults unless the environment says otherwise.
 
 The runtime runs as UID 10001. Silero VAD is packaged in its pinned wheel and
 needs no startup download. Caller barge-in is enabled. Recording and room text
@@ -109,7 +126,7 @@ implementation requirements, and coordinated rollout. The shared
 [contract fixture](tests/fixtures/bootstrap-v2.json) is exercised by offline HTTP
 tests; live LiveKit/SIP acceptance of v2 has not been exercised.
 
-Set `AIDA_BOOTSTRAP_URL` to the authority's HTTPS origin and
+Set `OFFICEPULSE_API_BASE_URL` to the authority's HTTPS origin and
 `AIDA_ROUTE_TOKEN_ATTRIBUTE` to the trunk's mapping for `X-Aida-Route-Token`.
 `AIDA_BOOTSTRAP_TIMEOUT_SECONDS` bounds all startup work (default 30, range 1–60).
 No audio turns or greeting begin until authorization, profile validation,

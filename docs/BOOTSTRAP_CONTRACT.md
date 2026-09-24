@@ -120,7 +120,7 @@ Accept: application/json
 }
 ```
 
-The URL comes only from `AIDA_BOOTSTRAP_URL`, an HTTPS origin with no userinfo,
+The URL comes only from `OFFICEPULSE_API_BASE_URL`, an HTTPS origin with no userinfo,
 path, query, or fragment. Environment proxy credentials are not used. The client
 follows no redirects, makes no automatic retries, accepts only status 200 and
 uncompressed `application/json`, and caps the response at 69,632 bytes. Each
