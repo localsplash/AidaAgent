@@ -15,6 +15,8 @@ services:
       TZ: ${TZ:-America/Los_Angeles}
     init: true
     stop_grace_period: 60s
+    # The reverse proxy reaches /healthz by container name on its network.
+    networks: [default, proxy]
     # Internal Docker network only: SDK health and application diagnostics.
     expose: ["8081", "8082"]
     healthcheck:
@@ -22,3 +24,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+networks:
+  proxy:
+    external: true
+    name: ${AIDA_PROXY_NETWORK:-npm_network}
