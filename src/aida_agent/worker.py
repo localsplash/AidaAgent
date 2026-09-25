@@ -21,6 +21,7 @@ from .config import (
 )
 from .control import ControlHandler
 from .monitored_server import MonitoredAgentServer
+from .transcript_history import TranscriptHistory
 from .transcripts import TranscriptPublisher, TranscriptStream
 
 logger = logging.getLogger("aida_agent")
@@ -58,6 +59,7 @@ async def entrypoint(ctx: JobContext):
 
     session = None
     publisher = None
+    history = None
     startup = None
     aborted = False
     cleaned = False
@@ -120,7 +122,7 @@ async def entrypoint(ctx: JobContext):
             startup.cancel()
             await asyncio.gather(startup, return_exceptions=True)
         # Each close is bounded; a provider cannot hold the worker indefinitely.
-        for resource in (publisher, control, session):
+        for resource in (history, publisher, control, session):
             if resource is not None:
                 try:
                     close = resource.aclose if resource is session else resource.close
@@ -131,7 +133,7 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(cleanup)
 
     async def start_authorized():
-        nonlocal session, publisher, stage
+        nonlocal session, publisher, history, stage
         # One deadline covers join, SIP attributes, HTTP, session start and ready delivery.
         async with asyncio.timeout(bootstrap.timeout_seconds):
             await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
@@ -152,6 +154,10 @@ async def entrypoint(ctx: JobContext):
             control.failed_statement = call.failed_transfer_statement
             stream = TranscriptStream(call.call_id)
             publisher = TranscriptPublisher(ctx.room.local_participant, abort)
+            history = TranscriptHistory(
+                ctx.room, session, call.call_id,
+                lambda: control.ready and not aborted and not control.stopping,
+            )
 
             @session.on("user_input_transcribed")
             def on_caller(event):
@@ -161,9 +167,12 @@ async def entrypoint(ctx: JobContext):
                     observe("caller-stt-final", **counts)
                 if control.ready and not aborted and not control.stopping:
                     publisher.enqueue(stream.caller(event.transcript, event.is_final))
+                    history.caller(event.transcript, event.is_final)
 
             @session.on("conversation_item_added")
             def on_item(event):
+                if control.ready and not aborted and not control.stopping:
+                    history.item(event.item)
                 if (control.ready and not aborted and not control.stopping
                         and event.item.role == "assistant"):
                     counts["assistantItems"] += 1
@@ -211,6 +220,7 @@ async def entrypoint(ctx: JobContext):
                 return
             # No await between the final checks and enabling normal turns.
             publisher.start()
+            history.start()
             if not control.activate():
                 return
             session.output.set_audio_enabled(True)
