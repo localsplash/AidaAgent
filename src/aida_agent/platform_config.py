@@ -21,6 +21,9 @@ SETTING_KEYS = (
     # LiveKit project shared with OfficePulse (app=aida). The SDK reads these from the
     # environment, which is why the store is applied there rather than passed around.
     "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_AGENT_NAME",
+    # Optional: bill LiveKit Inference (STT/LLM/TTS) to another project's key while rooms
+    # stay on LIVEKIT_URL. The SDK falls back to LIVEKIT_API_KEY/SECRET when unset (app=aida).
+    "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_INFERENCE_API_SECRET",
     # OfficePulse's private API origin and the SIP trunk attribute (app=aida).
     "OFFICEPULSE_API_BASE_URL", "AIDA_ROUTE_TOKEN_ATTRIBUTE", "AIDA_BOOTSTRAP_TIMEOUT_SECONDS",
     # Model and voice choices (app=aida-agent).

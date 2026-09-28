@@ -99,3 +99,11 @@ def test_setting_keys_cover_the_worker_and_preview_settings():
 
     assert set(VOICE_SETTINGS) <= set(SETTING_KEYS)
     assert "LIVEKIT_AGENT_NAME" in SETTING_KEYS
+
+
+def test_inference_credentials_are_optional_aida_settings():
+    """Inference can be billed to another project's key while rooms stay on LIVEKIT_URL."""
+    assert {"LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_INFERENCE_API_SECRET"} <= set(SETTING_KEYS)
+    values = resolve([row("aida", "LIVEKIT_INFERENCE_API_KEY", "APIinference"),
+                      row("aida", "LIVEKIT_INFERENCE_API_SECRET", "  ")])
+    assert values == {"LIVEKIT_INFERENCE_API_KEY": "APIinference"}
