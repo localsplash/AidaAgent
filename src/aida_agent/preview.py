@@ -6,8 +6,11 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Mapping
 
+from .build_info import BUILD_INFO
+
 VOICE_SETTINGS = (
     "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET",
+    "OFFICEPULSE_API_BASE_URL", "AIDA_ROUTE_TOKEN_ATTRIBUTE",
     "AIDA_STT_MODEL", "AIDA_LLM_MODEL", "AIDA_TTS_MODEL", "AIDA_TTS_VOICE",
 )
 
@@ -15,7 +18,7 @@ VOICE_SETTINGS = (
 def status(env: Mapping[str, str]) -> dict:
     missing = [key for key in VOICE_SETTINGS if not env.get(key, "").strip()]
     return {
-        "mode": "preview", "voiceEnabled": False,
+        **BUILD_INFO, "mode": "preview", "voiceEnabled": False,
         "status": "waiting_for_voice_configuration" if missing else "preview_mode",
         "missingSettings": missing,
     }

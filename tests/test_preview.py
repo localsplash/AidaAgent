@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 
+from aida_agent.build_info import BUILD_INFO
 from aida_agent.preview import VOICE_SETTINGS, make_server, status
 
 
@@ -34,6 +35,8 @@ def test_preview_health_is_live_but_never_ready_for_voice():
             assert response.status == expected
             if path != "/unknown":
                 assert json.loads(body)["voiceEnabled"] is False
+                for key, value in BUILD_INFO.items():
+                    assert json.loads(body)[key] == value
                 assert response.getheader("Cache-Control") == "no-store"
             connection.close()
     finally:

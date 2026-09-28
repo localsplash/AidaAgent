@@ -1,16 +1,27 @@
 """LiveKit SDK adapter. No identity database, carrier API, or room-admin client."""
 
+import asyncio
+import json
 import logging
 import os
 import re
 import sys
 
 from livekit import rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, room_io
+from livekit.agents import (
+    Agent, AgentServer, AgentSession, AutoSubscribe, JobContext, cli, inference, room_io,
+)
 from livekit.plugins import silero
 
-from .config import CallConfiguration, DeploymentConfiguration, InvalidConfiguration
+from .admission import SipAdmission
+from .bootstrap import BootstrapClient
+from .config import (
+    BootstrapConfiguration, CallConfiguration, DeploymentConfiguration,
+    DispatchConfiguration, InvalidConfiguration,
+)
 from .control import ControlHandler
+from .monitored_server import MonitoredAgentServer
+from .transcript_history import TranscriptHistory
 from .transcripts import TranscriptPublisher, TranscriptStream
 
 logger = logging.getLogger("aida_agent")
@@ -38,84 +49,225 @@ def create_session(deployment: DeploymentConfiguration, call: CallConfiguration,
 
 async def entrypoint(ctx: JobContext):
     try:
-        call = CallConfiguration.parse(ctx.job.metadata, ctx.room.name)
+        dispatch = DispatchConfiguration.parse(ctx.job.metadata, ctx.room.name)
         deployment = DeploymentConfiguration.from_env(os.environ)
+        bootstrap = BootstrapConfiguration.from_env(os.environ)
     except InvalidConfiguration:
         logger.warning("agent job rejected: invalid configuration")
         ctx.shutdown(reason="invalid configuration")
         return
 
-    session = create_session(deployment, call, ctx.proc.userdata["vad"])
-    stream = TranscriptStream(call.call_id)
+    session = None
+    publisher = None
+    history = None
+    startup = None
+    aborted = False
+    cleaned = False
+    stage = "connect"
+    counts = {"sttEvents": 0, "sttFinalEvents": 0, "assistantItems": 0}
+
+    def observe(event, **fields):
+        # Only explicit lifecycle fields/counts; never provider errors or call content.
+        # Scope comes from the trusted dispatch, never from caller ID or participant
+        # attributes, and the authorized profile must match it (bootstrap.py).
+        logger.info("agent lifecycle", extra={
+            "callSessionId": dispatch.call_id, "pbxInstanceId": dispatch.pbx_instance_id,
+            "context": dispatch.context, "event": event, **fields,
+        })
     control = ControlHandler(
-        call.call_id, session, ctx.room.disconnect,
-        lambda: ctx.shutdown(reason="human takeover"),
-        failed_statement=call.failed_transfer_statement,
+        dispatch.call_id, None, ctx.room.disconnect,
+        lambda: ctx.shutdown(reason="human takeover"), ready=False,
     )
-    publisher: TranscriptPublisher | None = None
 
-    @session.on("user_input_transcribed")
-    def on_caller(event):
-        if publisher is not None and not control.stopping:
-            publisher.enqueue(stream.caller(event.transcript, event.is_final))
+    def silence():
+        if session is not None:
+            session.input.set_audio_enabled(False)
+            session.output.set_audio_enabled(False)
+            try:
+                session.interrupt(force=True)
+                session.shutdown(drain=False)
+            except RuntimeError:
+                pass
 
-    @session.on("conversation_item_added")
-    def on_item(event):
-        # User history items would duplicate STT finals. Assistant history is the
-        # SDK's spoken/committed text, including its interruption reconciliation.
-        if publisher is not None and event.item.role == "assistant":
-            publisher.enqueue(stream.assistant(event.item.text_content or "", event.item.id))
+    def abort():
+        nonlocal aborted
+        if aborted or cleaned:
+            return
+        aborted = True
+        silence()
+        if startup is not None and not startup.done():
+            startup.cancel()
+        ctx.shutdown(reason="call admission ended")
+
+    admission = SipAdmission(ctx.room, bootstrap.route_token_attribute, abort)
 
     @ctx.room.on("data_received")
     def on_data(packet):
-        control.receive(packet)
-
-    @session.on("close")
-    def on_close(_event):
-        ctx.shutdown(reason="agent session closed")
+        if not aborted:
+            control.receive(packet)
+            if control.stopping and not control.ready:
+                abort()
 
     async def cleanup():
+        nonlocal cleaned
+        if cleaned:
+            return
+        cleaned = True
+        observe("closing", **counts)
+        control.ready = False
+        admission.close()
         ctx.room.off("data_received", on_data)
-        if publisher is not None:
-            await publisher.close()
-        await control.close()
-        await session.aclose()
+        silence()
+        if startup is not None and not startup.done():
+            startup.cancel()
+            await asyncio.gather(startup, return_exceptions=True)
+        # Each close is bounded; a provider cannot hold the worker indefinitely.
+        for resource in (history, publisher, control, session):
+            if resource is not None:
+                try:
+                    close = resource.aclose if resource is session else resource.close
+                    await asyncio.wait_for(close(), timeout=2)
+                except Exception:
+                    pass
 
     ctx.add_shutdown_callback(cleanup)
-    await ctx.connect()
-    if control.stopping:
-        return
-    # The RTC SDK has no local_participant before connect() completes.
-    publisher = TranscriptPublisher(
-        ctx.room.local_participant,
-        lambda: ctx.shutdown(reason="transcript delivery unavailable"),
-    )
-    publisher.start()
-    await session.start(
-        agent=Agent(instructions=call.instructions()), room=ctx.room,
-        room_options=room_io.RoomOptions(
-            participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
-            text_input=False, text_output=False, video_input=False,
-            close_on_disconnect=True, delete_room_on_close=False,
-        ),
-        record=False,
-    )
-    if not control.stopping:
-        if call.opening_statement:
-            session.say(call.opening_statement, allow_interruptions=True)
-        else:
-            session.generate_reply(
-                instructions="Greet the caller briefly in the configured locale and ask how you "
-                "can help.",
-                allow_interruptions=True,
+
+    async def start_authorized():
+        nonlocal session, publisher, history, stage
+        # One deadline covers join, SIP attributes, HTTP, session start and ready delivery.
+        async with asyncio.timeout(bootstrap.timeout_seconds):
+            await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
+            stage = "sip-admission"
+            leg = await admission.wait()
+            stage = "bootstrap"
+            call = await BootstrapClient(bootstrap).authorize(dispatch, ctx.room.name, leg)
+            observe("bootstrap-authorized")
+            admission.validate()
+            if aborted or control.stopping:
+                return
+            stage = "session-create"
+            session = create_session(deployment, call, ctx.proc.userdata["vad"])
+            session.input.set_audio_enabled(False)
+            session.output.set_audio_enabled(False)
+            control.session = session
+            control.transfer_statement = call.transfer_statement
+            control.failed_statement = call.failed_transfer_statement
+            stream = TranscriptStream(call.call_id)
+            publisher = TranscriptPublisher(ctx.room.local_participant, abort)
+            history = TranscriptHistory(
+                ctx.room, session, call.call_id,
+                lambda: control.ready and not aborted and not control.stopping,
             )
+
+            @session.on("user_input_transcribed")
+            def on_caller(event):
+                counts["sttEvents"] += 1
+                counts["sttFinalEvents"] += int(event.is_final)
+                if event.is_final:
+                    observe("caller-stt-final", **counts)
+                if control.ready and not aborted and not control.stopping:
+                    publisher.enqueue(stream.caller(event.transcript, event.is_final))
+                    history.caller(event.transcript, event.is_final)
+
+            @session.on("conversation_item_added")
+            def on_item(event):
+                if control.ready and not aborted and not control.stopping:
+                    history.item(event.item)
+                if (control.ready and not aborted and not control.stopping
+                        and event.item.role == "assistant"):
+                    counts["assistantItems"] += 1
+                    observe("assistant-item", **counts)
+                    publisher.enqueue(stream.assistant(event.item.text_content or "", event.item.id))
+
+            @session.on("error")
+            def on_error(event):
+                observe("session-error", recoverable=bool(getattr(event.error, "recoverable", False)))
+
+            @session.on("close")
+            def on_close(_event):
+                abort()
+
+            stage = "session-start"
+            await session.start(
+                agent=Agent(instructions=call.instructions()), room=ctx.room,
+                room_options=room_io.RoomOptions(
+                    participant_identity=leg.identity,
+                    participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+                    text_input=False, text_output=False, video_input=False,
+                    close_on_disconnect=True, delete_room_on_close=False,
+                ),
+                session_host=False, record=False,
+            )
+            observe("session-started")
+            stage = "sip-audio-subscription"
+            await admission.subscribe_audio()
+            observe("sip-audio-subscribed")
+            admission.validate()
+            if aborted or control.stopping:
+                return
+            local = ctx.room.local_participant
+            if not local.identity or not local.sid:
+                raise InvalidConfiguration("agent identity unavailable")
+            stage = "readiness-publish"
+            await local.publish_data(json.dumps({
+                "type": "aida.event.agent_ready", "schemaVersion": 1,
+                "callSessionId": dispatch.call_id,
+                "agentIdentity": local.identity, "agentParticipantSid": local.sid,
+            }).encode(), topic="aida.event.agent_ready", reliable=True)
+            observe("readiness-published")
+            admission.validate()
+            if aborted or control.stopping:
+                return
+            # No await between the final checks and enabling normal turns.
+            publisher.start()
+            history.start()
+            if not control.activate():
+                return
+            session.output.set_audio_enabled(True)
+            session.input.set_audio_enabled(True)
+            observe("conversation-enabled")
+            if call.opening_statement:
+                session.say(call.opening_statement, allow_interruptions=True)
+            else:
+                session.generate_reply(
+                    instructions="Greet the caller briefly in English and ask how you can help.",
+                    allow_interruptions=True,
+                )
+
+    startup = asyncio.create_task(start_authorized())
+    try:
+        await startup
+    except asyncio.CancelledError:
+        # SIP loss/takeover and SDK job shutdown cancel all pending startup work.
+        abort()
+    except Exception as error:
+        # Upstream/provider errors can contain credentials or prompts: log no payload.
+        logger.warning("agent job rejected: call admission failed")
+        observe("startup-failed", stage=stage, errorType=type(error).__name__)
+        abort()
+    finally:
+        if aborted or (control.stopping and not control.ready):
+            await cleanup()
+            try:
+                await asyncio.wait_for(ctx.room.disconnect(), timeout=2)
+            except Exception:
+                pass
 
 
 def make_server() -> AgentServer:
-    agent_name = os.environ.get("AIDA_AGENT_NAME", "aida-prime")
+    agent_name = os.environ.get("LIVEKIT_AGENT_NAME", "aida-prime")
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", agent_name):
-        raise InvalidConfiguration("invalid AIDA_AGENT_NAME")
-    server = AgentServer(setup_fnc=prewarm, num_idle_processes=1, log_level="INFO")
+        raise InvalidConfiguration("invalid LIVEKIT_AGENT_NAME")
+    try:
+        status_port = int(os.environ.get("AIDA_STATUS_PORT", "8082"))
+        if not 1 <= status_port <= 65535 or status_port == 8081:
+            raise ValueError
+    except ValueError:
+        raise InvalidConfiguration("AIDA_STATUS_PORT must be 1-65535 and differ from SDK port 8081") from None
+    server = MonitoredAgentServer(
+        setup_fnc=prewarm, num_idle_processes=1, log_level="INFO",
+        status_host=os.environ.get("AIDA_STATUS_HOST", "0.0.0.0"), status_port=status_port,
+    )
     server.rtc_session(agent_name=agent_name)(entrypoint)
     return server
 
@@ -125,8 +277,13 @@ def main():
     if any(arg in ("start", "dev") for arg in sys.argv[1:]) and "--help" not in sys.argv:
         try:
             DeploymentConfiguration.from_env(os.environ)
+            BootstrapConfiguration.from_env(os.environ)
         except InvalidConfiguration as error:
             raise SystemExit(str(error)) from None
+        # The SDK reads these itself; say which row is missing rather than failing later.
+        for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+            if not os.environ.get(key, "").strip():
+                raise SystemExit(f"deployment setting {key} is required (PlatformConfig app=aida)")
     cli.run_app(make_server())
 
 
