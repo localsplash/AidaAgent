@@ -92,7 +92,7 @@ keys and an unreachable store stop the worker rather than falling back.
 
 | Scope | Keys |
 | --- | --- |
-| `aida` | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `OFFICEPULSE_API_BASE_URL`, `AIDA_ROUTE_TOKEN_ATTRIBUTE` — shared with OfficePulse and AidaAdmin |
+| `aida` | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `OFFICEPULSE_API_BASE_URL`, `AIDA_ROUTE_TOKEN_ATTRIBUTE` — shared with OfficePulse and AidaAdmin; optionally `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` to bill LiveKit Inference (STT/LLM/TTS) to another project's key while rooms stay on `LIVEKIT_URL` (the SDK falls back to `LIVEKIT_API_KEY`/`_SECRET` when they are blank) |
 | `aida-agent` | `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL`, `AIDA_TTS_VOICE`, optionally `AIDA_BOOTSTRAP_TIMEOUT_SECONDS` |
 
 `AIDA_STATUS_HOST`/`AIDA_STATUS_PORT` and `TZ` are process knobs, not settings,
