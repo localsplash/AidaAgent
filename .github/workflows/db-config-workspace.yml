@@ -1,0 +1,60 @@
+name: Verify agent database settings contract
+on:
+  push:
+    branches: [chore/standard-db-settings-20260929]
+    paths: [.github/workflows/db-config-workspace.yml]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply scoped database documentation and regression coverage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('README.md')
+          text = path.read_text()
+          marker = '\n| Scope | Keys |\n'
+          assert marker in text
+          text = text.replace(marker, "\nThe worker has no SQL connection. AidaPlatformDB provisions `DB_HOST`, `DB_NAME`,\n`DB_USER`, `DB_PASSWORD` and optional `DB_PORT` for the database-owning applications\nand AidaAdmin's separate runtime reader, not for `aida-agent`. Call state is obtained\nthrough OfficePulse's private API; database credentials are not worker settings.\n" + marker, 1)
+          path.write_text(text)
+          path = Path('docs/DEPLOY_DEV_AGENT_BRIEF.md')
+          text = path.read_text()
+          for old, new in [('RUNTIME_MYSQL_HOST','DB_HOST'), ('RUNTIME_MYSQL_PORT','DB_PORT'), ('RUNTIME_MYSQL_USER','DB_USER'), ('RUNTIME_MYSQL_PASSWORD','DB_PASSWORD'), ('RUNTIME_MYSQL_DATABASE','DB_NAME')]:
+              text = text.replace(old, new)
+          path.write_text(text)
+          path = Path('tests/test_platform_config.py')
+          path.write_text(path.read_text() + '''
+
+          def test_database_settings_are_not_worker_configuration():
+              """The worker reaches calls through OfficePulse; it never acquires SQL credentials."""
+              keys = ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD")
+              rows = [row(scope, key, "not-for-the-worker")
+                      for scope in ("*", "aida", "aida-agent", "aida-admin", "aida-admin-runtime", "officepulse")
+                      for key in keys]
+              assert not set(keys) & set(SETTING_KEYS)
+              assert resolve(rows) == {}
+          ''')
+          PY
+          git diff --check
+      - name: Run full offline agent tests
+        run: |
+          python -m pip install -e '.[test]'
+          ruff check .
+          python -m pytest -q
+      - name: Publish tested work branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md docs/DEPLOY_DEV_AGENT_BRIEF.md tests/test_platform_config.py
+          git commit -m 'test: keep AidaAgent database-free and document canonical DB settings'
+          git push origin HEAD:${{ github.ref_name }}
+          echo "VALIDATED_COMMIT=$(git rev-parse HEAD)"
+          echo "VALIDATED_TREE=$(git rev-parse HEAD^{tree})"
