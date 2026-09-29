@@ -107,3 +107,13 @@ def test_inference_credentials_are_optional_aida_settings():
     values = resolve([row("aida", "LIVEKIT_INFERENCE_API_KEY", "APIinference"),
                       row("aida", "LIVEKIT_INFERENCE_API_SECRET", "  ")])
     assert values == {"LIVEKIT_INFERENCE_API_KEY": "APIinference"}
+
+
+def test_database_settings_are_not_worker_configuration():
+    """The worker reaches calls through OfficePulse; it never acquires SQL credentials."""
+    keys = ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD")
+    rows = [row(scope, key, "not-for-the-worker")
+            for scope in ("*", "aida", "aida-agent", "aida-admin", "aida-admin-runtime", "officepulse")
+            for key in keys]
+    assert not set(keys) & set(SETTING_KEYS)
+    assert resolve(rows) == {}

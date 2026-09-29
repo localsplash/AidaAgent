@@ -90,6 +90,11 @@ puts the values in its environment (the LiveKit SDK reads `LIVEKIT_*` there). A
 same-named variable in `.env` is ignored. Blank rows are unset; duplicate scoped
 keys and an unreachable store stop the worker rather than falling back.
 
+The worker has no SQL connection. AidaPlatformDB provisions `DB_HOST`, `DB_NAME`,
+`DB_USER`, `DB_PASSWORD` and optional `DB_PORT` for the database-owning applications
+and AidaAdmin's separate runtime reader, not for `aida-agent`. Call state is obtained
+through OfficePulse's private API; database credentials are not worker settings.
+
 | Scope | Keys |
 | --- | --- |
 | `aida` | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `OFFICEPULSE_API_BASE_URL`, `AIDA_ROUTE_TOKEN_ATTRIBUTE` — shared with OfficePulse and AidaAdmin; optionally `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` to bill LiveKit Inference (STT/LLM/TTS) to another project's key while rooms stay on `LIVEKIT_URL` (the SDK falls back to `LIVEKIT_API_KEY`/`_SECRET` when they are blank) |
