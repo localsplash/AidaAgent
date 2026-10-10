@@ -254,7 +254,7 @@ OfficePulse token authorization and SUPER ADMIN visibility.
 - [Data packets](https://docs.livekit.io/transport/data/packets/)
 - [Inference TTS and voice configuration](https://docs.livekit.io/agents/models/tts/cartesia/)
 - [Unified platform plan](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/dev/docs/PLATFORM_MASTER_PLAN.md)
-- [Current OfficePulse runtime API](https://github.com/localsplash/OfficePulseAidaIntegration/blob/dev/docs/PLATFORM_API.md)
+- [Current OfficePulse runtime API](https://github.com/localsplash/AidaPbx/blob/dev/docs/PLATFORM_API.md)
 - [Agent bootstrap contract](docs/BOOTSTRAP_CONTRACT.md)
 
 ## Status-only preview
