@@ -2,7 +2,7 @@
 
 This is the consumer contract implemented for AidaAgent #7 and #2 and revised
 for AidaAgent #12 (Asterisk context replaces tenant as the call-routing scope,
-coordinated with OfficePulseAidaIntegration #22 and AidaAdmin #42). It is a
+coordinated with AidaPbx #22 and AidaAdmin #42). It is a
 breaking replacement for the inline business metadata in Agent PR #8 and for the
 v1 dispatch/snapshot shapes. The executable cross-repository example is
 [`tests/fixtures/bootstrap-v2.json`](../tests/fixtures/bootstrap-v2.json),
@@ -35,8 +35,8 @@ authorization; the scope only pins which business the credentials may resolve.
 Checked over GitHub SSH on 2026-09-11:
 
 - AidaAgent main/dev: `bdaacf5079795b7a5917745ea6dce2dc77006507` before this change.
-- OfficePulseAidaIntegration main: `48ee08a1ef99f4b6acd32c2a91ebf67ed34e4bc4`.
-- OfficePulseAidaIntegration dev: `ddb064e28e21728ee7019e655e5378562eb13977`.
+- AidaPbx main: `48ee08a1ef99f4b6acd32c2a91ebf67ed34e4bc4`.
+- AidaPbx dev: `ddb064e28e21728ee7019e655e5378562eb13977`.
 - Platform specification main/dev: `e28990b29b9cf22da981d06351f15f15fa29d225`.
 
 OfficePulse dev removed the legacy NocoDB call orchestrator; its canonical
@@ -290,4 +290,4 @@ metadata; this implementation changes behavior explicitly.
 References: [issue #7](https://github.com/localsplash/AidaAgent/issues/7),
 [issue #2](https://github.com/localsplash/AidaAgent/issues/2),
 [unified platform plan](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/dev/docs/PLATFORM_MASTER_PLAN.md),
-[current OfficePulse API](https://github.com/localsplash/OfficePulseAidaIntegration/blob/dev/docs/PLATFORM_API.md).
+[current OfficePulse API](https://github.com/localsplash/AidaPbx/blob/dev/docs/PLATFORM_API.md).

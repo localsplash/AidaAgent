@@ -210,7 +210,7 @@ References: [Gemma model ID](https://docs.livekit.io/agents/models/llm/),
 ## OfficePulse environment handoff
 
 “OfficePulseAidaInfrastructure” is interpreted here as the runtime service
-`localsplash/OfficePulseAidaIntegration`. Verify the intended service before
+`localsplash/AidaPbx`. Verify the intended service before
 editing any environment file. At dev `ddb064e28e21728ee7019e655e5378562eb13977`,
 `src/config.ts` accepts the following LiveKit settings:
 
