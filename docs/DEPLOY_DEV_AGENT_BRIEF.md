@@ -239,7 +239,7 @@ Also resolve the actual deployment-specific settings already owned by OfficePuls
   service/account and application (the default app is `aida`). `localhost` inside
   the integration container does not address a separate PBX host.
 - `DB_HOST`, `DB_PORT`, `DB_USER`,
-  `DB_PASSWORD`, `DB_NAME=aidacalls_db`: its runtime store.
+  `DB_PASSWORD`, `DB_NAME=aida_pbx_db` (`aidacalls_db` until renamed): its runtime store.
   Keep this separate from native Asterisk inventory/provisioning database access.
 - `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`: approved PlatformConfig access. Effective
   settings resolve nonblank environment overrides over `officepulse`, `aida`, `*`.
