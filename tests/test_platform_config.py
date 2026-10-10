@@ -16,7 +16,7 @@ def test_later_scope_wins_blank_is_unset_and_other_keys_are_ignored():
     values = resolve([
         row("*", "LIVEKIT_URL", "wss://global"), row("aida", "LIVEKIT_URL", "wss://voice"),
         row("aida-agent", "AIDA_LLM_MODEL", " model/x "), row("aida", "AIDA_TTS_VOICE", "   "),
-        row("officepulse", "AIDA_STT_MODEL", "not-mine"), row("*", "PARENT_DOMAIN", "x.tld"),
+        row("aida-pbx", "AIDA_STT_MODEL", "not-mine"), row("*", "PARENT_DOMAIN", "x.tld"),
         row("aida", "OFFICEPULSE_API_BASE_URL", None),
     ])
     assert values == {"LIVEKIT_URL": "wss://voice", "AIDA_LLM_MODEL": "model/x"}
@@ -113,7 +113,7 @@ def test_database_settings_are_not_worker_configuration():
     """The worker reaches calls through OfficePulse; it never acquires SQL credentials."""
     keys = ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD")
     rows = [row(scope, key, "not-for-the-worker")
-            for scope in ("*", "aida", "aida-agent", "aida-admin", "aida-admin-runtime", "officepulse")
+            for scope in ("*", "aida", "aida-agent", "aida-admin", "aida-pbx-reader", "aida-pbx")
             for key in keys]
     assert not set(keys) & set(SETTING_KEYS)
     assert resolve(rows) == {}
