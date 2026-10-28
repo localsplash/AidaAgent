@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
+from . import logstore
 from .build_info import BUILD_INFO
 
 
@@ -64,6 +65,7 @@ class WorkerStatus:
                 "failed": self.failed_sessions,
                 "scope": "since_process_start",
             },
+            "logstore": logstore.stats(),
         }
 
 

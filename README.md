@@ -33,7 +33,12 @@ Each business call has separate state.
 Requires Docker Compose, a LiveKit project with Inference access, and the
 OfficePulse/PBX SIP path into that project's rooms.
 
+The build also needs the private LiveKitLogstore library checked out next to this
+repository at the tag in `LIVEKIT_LOGSTORE_REF` (AidaPlatformDB's installer does this;
+`LIVEKIT_LOGSTORE_DIR` points elsewhere):
+
 ```sh
+git clone -b "$(cat LIVEKIT_LOGSTORE_REF)" https://github.com/localsplash/LiveKitLogstore.git ../LiveKitLogstore
 cp .env.example .env
 # Set NOCODB_BASE_URL and NOCODB_API_TOKEN; every other setting is a PlatformConfig row.
 scripts/with-build-info.sh docker compose build
@@ -74,7 +79,7 @@ Local Python development (Python 3.11–3.14):
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install -e '.[test]'
+pip install ../LiveKitLogstore -e '.[test]'
 aida-agent --help
 # Export NOCODB_BASE_URL and NOCODB_API_TOKEN; settings are read at start.
 aida-agent start
@@ -98,7 +103,7 @@ through OfficePulse's private API; database credentials are not worker settings.
 | Scope | Keys |
 | --- | --- |
 | `aida` | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `OFFICEPULSE_API_BASE_URL`, `AIDA_ROUTE_TOKEN_ATTRIBUTE` — shared with OfficePulse and AidaAdmin; optionally `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` to bill LiveKit Inference (STT/LLM/TTS) to another project's key while rooms stay on `LIVEKIT_URL` (the SDK falls back to `LIVEKIT_API_KEY`/`_SECRET` when they are blank) |
-| `aida-agent` | `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL`, `AIDA_TTS_VOICE`, optionally `AIDA_BOOTSTRAP_TIMEOUT_SECONDS` |
+| `aida-agent` | `AIDA_STT_MODEL`, `AIDA_LLM_MODEL`, `AIDA_TTS_MODEL`, `AIDA_TTS_VOICE`, optionally `AIDA_BOOTSTRAP_TIMEOUT_SECONDS`; LiveKitLogstore: `LOGSTORE_ENABLED` (`1` turns it on), `LOGSTORE_KEY_JSON` (secret, the bucket writer's service-account key JSON), optionally `LIVEKIT_TELEMETRY_ALLOW_PII` (`0` strips call content from spans) |
 
 `AIDA_STATUS_HOST`/`AIDA_STATUS_PORT` and `TZ` are process knobs, not settings,
 and keep their code defaults unless the environment says otherwise.
@@ -106,7 +111,20 @@ and keep their code defaults unless the environment says otherwise.
 The runtime runs as UID 10001. Silero VAD is packaged in its pinned wheel and
 needs no startup download. Caller barge-in is enabled. Recording and room text
 input are disabled. Application logs omit prompts, transcripts, metadata, and
-provider exception payloads. Keep SDK debug logging disabled for real calls;
+provider exception payloads.
+
+### LiveKitLogstore
+
+With `LOGSTORE_ENABLED=1` and a valid `LOGSTORE_KEY_JSON`, the worker sends everything
+the LiveKit SDK emits (session events, spans, logs, metrics, room events and each job's
+session report) to `gs://localsplash-app.firebasestorage.app/livekit-logstore/<LIVEKIT_AGENT_NAME>_<host>/`
+through [LiveKitLogstore](https://github.com/localsplash/LiveKitLogstore). That *does*
+include call content: transcripts, prompts and SIP participant attributes. The key is
+written to a private temporary file at start and removed from the environment. Anything
+else, including a missing row, leaves it off; a bad key or an unreachable bucket never
+affects calls. The host name comes from the host's `/etc/hostname`, mounted by
+`compose.yaml`. `/status` reports `logstore` counters for the worker process (job
+processes upload their own files). Keep SDK debug logging disabled for real calls;
 inference providers necessarily process the supplied audio and text.
 
 ## Dispatch and authorized profile
@@ -231,8 +249,8 @@ before the integration's simultaneous announcement/dialing change.
 ## Validation
 
 ```sh
-docker build --target test -t aida-agent:test .
-docker build --target runtime -t aida-agent:runtime .
+docker build --target test --build-context livekitlogstore=../LiveKitLogstore -t aida-agent:test .
+docker build --target runtime --build-context livekitlogstore=../LiveKitLogstore -t aida-agent:runtime .
 ```
 
 Dependency installation uses the network. Ruff, fake-provider tests, installed
@@ -303,6 +321,7 @@ or malformed identity fails the build. The wrapper reads these from the checkout
 
 ```sh
 scripts/with-build-info.sh sh -c 'docker build --target runtime \
+  --build-context livekitlogstore=../LiveKitLogstore \
   --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY \
   -t aida-agent:local .'
 scripts/with-build-info.sh docker compose up -d --build

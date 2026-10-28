@@ -13,6 +13,7 @@ from livekit.agents import (
 )
 from livekit.plugins import silero
 
+from . import logstore
 from .admission import SipAdmission
 from .bootstrap import BootstrapClient
 from .config import (
@@ -48,6 +49,8 @@ def create_session(deployment: DeploymentConfiguration, call: CallConfiguration,
 
 
 async def entrypoint(ctx: JobContext):
+    # First, so the job's room events, logs and report are captured from the start.
+    job_log = logstore.watch(ctx)
     try:
         dispatch = DispatchConfiguration.parse(ctx.job.metadata, ctx.room.name)
         deployment = DeploymentConfiguration.from_env(os.environ)
@@ -147,6 +150,7 @@ async def entrypoint(ctx: JobContext):
                 return
             stage = "session-create"
             session = create_session(deployment, call, ctx.proc.userdata["vad"])
+            job_log.watch(session)
             session.input.set_audio_enabled(False)
             session.output.set_audio_enabled(False)
             control.session = session
@@ -269,6 +273,7 @@ def make_server() -> AgentServer:
         status_host=os.environ.get("AIDA_STATUS_HOST", "0.0.0.0"), status_port=status_port,
     )
     server.rtc_session(agent_name=agent_name)(entrypoint)
+    logstore.watch_server(server)
     return server
 
 
@@ -284,6 +289,7 @@ def main():
         for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
             if not os.environ.get(key, "").strip():
                 raise SystemExit(f"deployment setting {key} is required (PlatformConfig app=aida)")
+        logstore.configure()
     cli.run_app(make_server())
 
 

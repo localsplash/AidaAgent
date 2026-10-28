@@ -2,12 +2,17 @@ FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 TZ=America/Los_Angeles
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml README.md setup.py build_metadata.py MANIFEST.in ./
+COPY pyproject.toml README.md setup.py build_metadata.py MANIFEST.in LIVEKIT_LOGSTORE_REF ./
 COPY src ./src
+# LiveKitLogstore is private, so it comes in as a named build context: the checkout of
+# the tag in LIVEKIT_LOGSTORE_REF (compose.yaml; CI passes --build-context).
+COPY --from=livekitlogstore pyproject.toml README.md /opt/livekit-logstore/
+COPY --from=livekitlogstore src /opt/livekit-logstore/src
 ARG BUILD_REVISION
 ARG SOURCE_DATE_EPOCH
 ARG BUILD_DIRTY
-RUN pip install .
+# One resolve, so the library cannot pull a newer livekit-agents than the pin.
+RUN pip install /opt/livekit-logstore .
 
 FROM base AS test
 ARG BUILD_REVISION

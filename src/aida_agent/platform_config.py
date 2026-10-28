@@ -28,6 +28,9 @@ SETTING_KEYS = (
     "OFFICEPULSE_API_BASE_URL", "AIDA_ROUTE_TOKEN_ATTRIBUTE", "AIDA_BOOTSTRAP_TIMEOUT_SECONDS",
     # Model and voice choices (app=aida-agent).
     "AIDA_STT_MODEL", "AIDA_LLM_MODEL", "AIDA_TTS_MODEL", "AIDA_TTS_VOICE",
+    # LiveKitLogstore (app=aida-agent): on/off, the bucket writer's service-account key
+    # (secret, logstore.py) and the SDK's own switch for call content in spans.
+    "LOGSTORE_ENABLED", "LOGSTORE_KEY_JSON", "LIVEKIT_TELEMETRY_ALLOW_PII",
 )
 PAGE_SIZE = 200
 TIMEOUT_SECONDS = 5
