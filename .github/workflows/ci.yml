@@ -10,23 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Read the pinned LiveKitLogstore tag
-        id: logstore
-        run: echo "ref=$(cat LIVEKIT_LOGSTORE_REF)" >> "$GITHUB_OUTPUT"
-      # Private repository: LIVEKIT_LOGSTORE_TOKEN is a read-only token for it.
-      - uses: actions/checkout@v4
-        with:
-          repository: localsplash/LiveKitLogstore
-          ref: ${{ steps.logstore.outputs.ref }}
-          token: ${{ secrets.LIVEKIT_LOGSTORE_TOKEN }}
-          path: .ci/LiveKitLogstore
       - name: Install dependencies, run fake-provider tests, and check worker CLI
         run: |
           scripts/with-build-info.sh sh -c 'docker build --target test --tag aida-agent:test \
-            --build-context livekitlogstore=.ci/LiveKitLogstore \
             --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY .'
       - name: Build non-root runtime image
         run: |
           scripts/with-build-info.sh sh -c 'docker build --target runtime --tag aida-agent:runtime \
-            --build-context livekitlogstore=.ci/LiveKitLogstore \
             --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY .'

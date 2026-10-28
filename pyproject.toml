@@ -8,12 +8,9 @@ version = "0.1.0"
 description = "OfficePulse-dispatched LiveKit voice screening worker"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
-# livekit-logstore is private: the build installs it from the checkout named in
-# LIVEKIT_LOGSTORE_REF (Dockerfile, build context "livekitlogstore").
-dependencies = [
-    "livekit-agents==1.8.0", "livekit-plugins-silero==1.8.0", "aiohttp==3.14.3",
-    "livekit-logstore==0.1.0",
-]
+# livekit-logstore is not a dependency: the deployment installs it (Dockerfile,
+# build context "livekitlogstore"), and the worker runs without it.
+dependencies = ["livekit-agents==1.8.0", "livekit-plugins-silero==1.8.0", "aiohttp==3.14.3"]
 
 [project.optional-dependencies]
 test = ["pytest==8.4.2", "pytest-asyncio==1.2.0", "ruff==0.12.12"]

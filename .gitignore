@@ -9,4 +9,3 @@ dist/
 .env
 .env.*
 !.env.example
-.ci/

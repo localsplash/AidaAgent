@@ -1,9 +1,10 @@
 import json
 import logging
+import re
 import stat
-import tomllib
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_off_unless_exactly_enabled(enabled):
 
 
 @pytest.mark.parametrize("key_json", ["", "not json", "[]", json.dumps({**KEY, "type": "user"})])
-def test_bad_or_missing_key_turns_it_off_without_printing_the_value(key_json, caplog):
+def test_bad_or_missing_key_turns_it_off_without_printing_the_value(key_json, caplog, library):
     environ = {"LOGSTORE_ENABLED": "1", "LOGSTORE_KEY_JSON": key_json}
     with caplog.at_level(logging.WARNING, logger="aida_agent"):
         assert logstore.configure(environ) is False
@@ -50,7 +51,7 @@ def test_bad_or_missing_key_turns_it_off_without_printing_the_value(key_json, ca
     assert "secret-material" not in caplog.text and "not json" not in caplog.text
 
 
-def test_key_is_written_to_a_private_file_and_dropped_from_the_environment(caplog):
+def test_key_is_written_to_a_private_file_and_dropped_from_the_environment(caplog, library):
     environ = {"LOGSTORE_ENABLED": "1", "LOGSTORE_KEY_JSON": " " + json.dumps(KEY) + " "}
     with caplog.at_level(logging.DEBUG):
         assert logstore.configure(environ) is True
@@ -72,26 +73,49 @@ def test_disabled_hooks_touch_nothing():
     assert WorkerStatus().snapshot()["logstore"] == {"enabled": False}
 
 
-def test_enabled_hooks_call_the_library(monkeypatch):
-    import livekit_logstore
-
+@pytest.fixture
+def library(monkeypatch):
+    """A stand-in for the installed library; CI builds without it."""
     calls = []
+
+    class LiveKitLogstore:
+        @classmethod
+        def watch_server(cls, server):
+            calls.append(("server", server))
+
+        @classmethod
+        def watch(cls, ctx):
+            calls.append(("job", ctx))
+            return "job-log"
+
+        @classmethod
+        def stats(cls):
+            return {"records": 3, "uploads": 1, "failed": 0, "dropped": 0}
+
+    module = ModuleType("livekit_logstore")
+    module.LiveKitLogstore = LiveKitLogstore
+    monkeypatch.setitem(sys.modules, "livekit_logstore", module)
+    return calls
+
+
+def test_enabled_hooks_call_the_library(monkeypatch, library):
     monkeypatch.setenv("LOGSTORE_ENABLED", "1")
-    monkeypatch.setattr(livekit_logstore.LiveKitLogstore, "watch_server",
-                        classmethod(lambda cls, server: calls.append(("server", server))))
-    monkeypatch.setattr(livekit_logstore.LiveKitLogstore, "watch",
-                        classmethod(lambda cls, ctx: calls.append(("job", ctx)) or "job-log"))
-    monkeypatch.setattr(livekit_logstore.LiveKitLogstore, "stats",
-                        classmethod(lambda cls: {"records": 3, "uploads": 1, "failed": 0, "dropped": 0}))
     logstore.watch_server("srv")
     assert logstore.watch("ctx") == "job-log"
-    assert calls == [("server", "srv"), ("job", "ctx")]
+    assert library == [("server", "srv"), ("job", "ctx")]
     assert logstore.stats() == {"enabled": True, "records": 3, "uploads": 1, "failed": 0,
                                 "dropped": 0, "scope": "worker_process"}
 
 
-def test_pinned_version_matches_the_checked_out_tag():
-    root = Path(__file__).resolve().parents[1]
-    deps = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
-    pinned = next(d.split("==")[1] for d in deps if d.startswith("livekit-logstore=="))
-    assert (root / "LIVEKIT_LOGSTORE_REF").read_text().strip() == f"v{pinned}"
+def test_image_without_the_library_stays_off(monkeypatch, caplog):
+    monkeypatch.setitem(sys.modules, "livekit_logstore", None)
+    environ = {"LOGSTORE_ENABLED": "1", "LOGSTORE_KEY_JSON": json.dumps(KEY)}
+    with caplog.at_level(logging.WARNING, logger="aida_agent"):
+        assert logstore.configure(environ) is False
+    assert environ == {"LOGSTORE_ENABLED": "0"}
+    assert "not installed" in caplog.text
+
+
+def test_pinned_tag_is_a_release_tag():
+    ref = (Path(__file__).resolve().parents[1] / "LIVEKIT_LOGSTORE_REF").read_text().strip()
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", ref)

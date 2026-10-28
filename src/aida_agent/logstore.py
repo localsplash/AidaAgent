@@ -1,6 +1,7 @@
 """LiveKitLogstore wiring: every SDK emission of this worker, stored in the Firebase bucket.
 
-Off unless PlatformConfig says LOGSTORE_ENABLED=1 and holds the writer key as
+The library is installed by the deployment, not declared as a dependency (Dockerfile).
+Off unless it is installed and PlatformConfig says LOGSTORE_ENABLED=1 and holds the writer key as
 LOGSTORE_KEY_JSON (app=aida-agent, secret). The library reads a key *file*, so the key
 is written once to a private temporary file and only its path stays in the environment;
 job processes inherit that path. Nothing here prints the key or ever stops the worker.
@@ -23,6 +24,11 @@ def configure(environ: MutableMapping[str, str] = os.environ) -> bool:
         environ["LOGSTORE_ENABLED"] = "0"
         return False
     environ["LOGSTORE_ENABLED"] = "0"
+    try:
+        import livekit_logstore  # noqa: F401
+    except ImportError:
+        logger.warning("LiveKitLogstore off: the library is not installed in this image")
+        return False
     if not key_json:
         logger.warning("LiveKitLogstore off: LOGSTORE_KEY_JSON is blank (PlatformConfig app=aida-agent)")
         return False
