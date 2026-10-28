@@ -33,9 +33,10 @@ Each business call has separate state.
 Requires Docker Compose, a LiveKit project with Inference access, and the
 OfficePulse/PBX SIP path into that project's rooms.
 
-The build also needs the private LiveKitLogstore library checked out next to this
+The compose build installs the LiveKitLogstore library from a checkout next to this
 repository at the tag in `LIVEKIT_LOGSTORE_REF` (AidaPlatformDB's installer does this;
-`LIVEKIT_LOGSTORE_DIR` points elsewhere):
+`LIVEKIT_LOGSTORE_DIR` points elsewhere). A plain `docker build` leaves it out and the
+worker runs without it:
 
 ```sh
 git clone -b "$(cat LIVEKIT_LOGSTORE_REF)" https://github.com/localsplash/LiveKitLogstore.git ../LiveKitLogstore
@@ -79,7 +80,7 @@ Local Python development (Python 3.11–3.14):
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install ../LiveKitLogstore -e '.[test]'
+pip install -e '.[test]'   # add ../LiveKitLogstore to try LiveKitLogstore locally
 aida-agent --help
 # Export NOCODB_BASE_URL and NOCODB_API_TOKEN; settings are read at start.
 aida-agent start
@@ -121,7 +122,7 @@ session report) to `gs://localsplash-app.firebasestorage.app/livekit-logstore/<L
 through [LiveKitLogstore](https://github.com/localsplash/LiveKitLogstore). That *does*
 include call content: transcripts, prompts and SIP participant attributes. The key is
 written to a private temporary file at start and removed from the environment. Anything
-else, including a missing row, leaves it off; a bad key or an unreachable bucket never
+else, including a missing row or an image built without the library, leaves it off; a bad key or an unreachable bucket never
 affects calls. The host name comes from the host's `/etc/hostname`, mounted by
 `compose.yaml`. `/status` reports `logstore` counters for the worker process (job
 processes upload their own files). Keep SDK debug logging disabled for real calls;
@@ -249,8 +250,8 @@ before the integration's simultaneous announcement/dialing change.
 ## Validation
 
 ```sh
-docker build --target test --build-context livekitlogstore=../LiveKitLogstore -t aida-agent:test .
-docker build --target runtime --build-context livekitlogstore=../LiveKitLogstore -t aida-agent:runtime .
+docker build --target test -t aida-agent:test .
+docker build --target runtime -t aida-agent:runtime .
 ```
 
 Dependency installation uses the network. Ruff, fake-provider tests, installed
@@ -321,7 +322,6 @@ or malformed identity fails the build. The wrapper reads these from the checkout
 
 ```sh
 scripts/with-build-info.sh sh -c 'docker build --target runtime \
-  --build-context livekitlogstore=../LiveKitLogstore \
   --build-arg BUILD_REVISION --build-arg SOURCE_DATE_EPOCH --build-arg BUILD_DIRTY \
   -t aida-agent:local .'
 scripts/with-build-info.sh docker compose up -d --build
