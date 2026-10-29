@@ -1,13 +1,20 @@
+# Empty unless the deployment supplies LiveKitLogstore as the "livekitlogstore" build
+# context (compose.yaml: the checkout of the tag in LIVEKIT_LOGSTORE_REF).
+FROM scratch AS livekitlogstore
+
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 TZ=America/Los_Angeles
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml README.md setup.py build_metadata.py MANIFEST.in ./
+COPY pyproject.toml README.md setup.py build_metadata.py MANIFEST.in LIVEKIT_LOGSTORE_REF ./
 COPY src ./src
 ARG BUILD_REVISION
 ARG SOURCE_DATE_EPOCH
 ARG BUILD_DIRTY
-RUN pip install .
+# One resolve, so the library cannot pull a newer livekit-agents than the pin.
+RUN --mount=from=livekitlogstore,target=/opt/livekit-logstore \
+    if [ -f /opt/livekit-logstore/pyproject.toml ]; then pip install /opt/livekit-logstore .; \
+    else pip install .; fi
 
 FROM base AS test
 ARG BUILD_REVISION

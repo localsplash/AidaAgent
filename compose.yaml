@@ -5,6 +5,10 @@ services:
     build:
       context: .
       target: runtime
+      # Private library, checked out by AidaPlatformDB's installer next to this repo at
+      # the tag in LIVEKIT_LOGSTORE_REF.
+      additional_contexts:
+        livekitlogstore: ${LIVEKIT_LOGSTORE_DIR:-../LiveKitLogstore}
       args:
         BUILD_REVISION: ${BUILD_REVISION:?Export Git HEAD before building}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:?Export Git committer epoch before building}
@@ -13,6 +17,9 @@ services:
     env_file: .env
     environment:
       TZ: ${TZ:-America/Los_Angeles}
+    # LiveKitLogstore names its bucket folder after the machine, not the container.
+    volumes:
+      - /etc/hostname:/etc/logstore-host:ro
     init: true
     stop_grace_period: 60s
     # The reverse proxy reaches /healthz by container name on its network.
